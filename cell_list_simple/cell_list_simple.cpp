@@ -11,13 +11,13 @@ template<class DeviceType>
 class ParticleArray {
     public:
         enum ParticleFields {position=0, id};
-        //using device_type = DeviceType;
-        using memory_space = typename DeviceType::memory_space;
-        using execution_space = typename DeviceType::execution_space;
+        using device = DeviceType;
+        using memory_space = typename device::memory_space;
+        using execution_space = typename device::execution_space;
         
         using NodeTypes = Cabana::MemberTypes<double[3], size_t>;
         
-        using p_array_t_d = Cabana::AoSoA<NodeTypes, DeviceType>;
+        using p_array_t_d = Cabana::AoSoA<NodeTypes, device>;
         using positions_t_d = typename p_array_t_d::template member_slice_type<position>;
         using ids_t_d = typename p_array_t_d::template member_slice_type<id>;
 
