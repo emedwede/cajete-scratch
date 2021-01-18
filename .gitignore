@@ -1,32 +1,50 @@
-# Prerequisites
-*.d
+#Work around for ignoring binary files
+#Start
+#Ignore all
+*
 
-# Compiled Object files
-*.slo
-*.lo
-*.o
-*.obj
+#Unignore all with extensions
+!*.*
 
-# Precompiled Headers
-*.gch
-*.pch
+#Unignore all dirs
+!*/
+#End
 
-# Compiled Dynamic libraries
-*.so
-*.dylib
-*.dll
+#Unignore makefiles
+!Makefile
 
-# Fortran module files
-*.mod
-*.smod
+#ignore all object or archive files
+*.[oa]
 
-# Compiled Static libraries
-*.lai
-*.la
-*.a
-*.lib
+#ignore all vtk files
+*.vtk
 
-# Executables
-*.exe
-*.out
-*.app
+#igonore all old files
+*.old
+
+#ignore all temporary files
+*~
+#ignore all json files
+*.json
+
+#ignore ccls stuff
+*.ccls*
+
+#ignore vscode stuff
+*.vscode*
+#ignore all files in any directory named:
+#results/*
+
+output/
+
+DebugNotes/
+
+*build/
+
+results/
+
+docs/
+
+#but keep the folders
+#!results/.gitkeep
+#!output/.gitkeep
