@@ -5,4 +5,5 @@ project(cajete-scratch)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_STANDARD 14)
 
+find_package(Cabana REQUIRED)
 add_subdirectory(cell_list_simple)
