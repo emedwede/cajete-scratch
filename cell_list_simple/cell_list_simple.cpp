@@ -3,6 +3,8 @@
 #include <Cabana_Core.hpp>
 #include <Kokkos_Core.hpp>
 
+#include "grid.hpp"
+
 //Linked Cell List
 
 namespace Cajete {
@@ -111,7 +113,17 @@ int main(int argc, char *argv[]) {
     using MemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
     using ExecutionSpace = Kokkos::DefaultExecutionSpace;
     using DeviceType = Kokkos::Device<ExecutionSpace, MemorySpace>;
-
+    
+    Cajete::BrickGrid2D<double> grid(0.0, 0.0, 2.0, 2.0, 1.0, 1.0, 2);
+    int ic = 0, jc = 0;
+    grid.locatePoint(1.9, 1.9, ic, jc);
+    std::cout << "Coords: " << ic << " " << jc << std::endl;
+    
+    ic = 0; jc = 0;
+    grid.locatePoint(2.0, 2.0, ic, jc);
+    std::cout << "Coords: " << ic << " " << jc << std::endl;
+ 
+    std::cout << "Number of cells: " << grid.totalNumCells() << std::endl;
     Cajete::ParticleArray<DeviceType> p_array(10);
     std::cout << "Size: " << p_array.size() << std::endl;
     p_array.print();
