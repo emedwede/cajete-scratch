@@ -1,8 +1,8 @@
 #ifndef __CAJETE_BRICKGRID_HPP
 #define __CAJETE_BRICKGRID_HPP
 
-//#include "types.hpp"
-
+#include <Cabana_Core.hpp>
+#include <Kokkos_Core.hpp>
 
 namespace Cajete {
 
@@ -199,9 +199,16 @@ class CartesianGrid2D {
         {
             return (j*_nx) + i;
         }
-
+        
         KOKKOS_INLINE_FUNCTION
         ~CartesianGrid2D() {}
+
+        void test();
+};
+
+class Fun {
+    public:
+        void test();
 };
 
 //rectangular case based off the alternating, n/n+1 row criteria for 
