@@ -75,6 +75,11 @@ class BrickGrid2D {
                 return (j/2)*_num_ee+(j/2)*_num_eo+i;
             }
         }
+        
+        KOKKOS_INLINE_FUNCTION
+        void ijCellIndex(const int cardinal,const int& i, const int& j) {
+           //TODO implement conversion 
+        }
 
         KOKKOS_INLINE_FUNCTION
         void locatePoint(const Real xp, const Real yp, int& ic, int& jc) const {
@@ -94,8 +99,33 @@ class BrickGrid2D {
         }
         
         KOKKOS_INLINE_FUNCTION
-        void computeCellCorners(int ic, int jc) const {
-
+        void minMaxCellCorners(int ic, int jc, 
+                Real& x_min, Real& y_min,
+                Real& x_max, Real& y_max) const  
+        {
+            if(jc % 2 == 0) {
+                x_min = ic*_dx;
+                y_min = jc*_dy;
+                x_max = (ic+1)*_dx;
+                y_max = (jc+1)*_dy;
+            } else {
+                if(ic == 0) {
+                    x_min = ic*_dx;
+                    y_min = jc*_dy;
+                    x_max = (ic+0.5)*_dx;
+                    y_max = (jc+1)*_dy;
+                } else if(ic == _num_eo-1) {
+                    x_min = (ic-0.5)*_dx;
+                    y_min = jc*_dy;
+                    x_max = ic*_dx;
+                    y_max = (jc+1)*_dy;
+                } else {
+                    x_min = (ic-0.5)*_dx;
+                    y_min = jc*_dy;
+                    x_max = (ic+0.5)*_dx;
+                    y_max = (jc+1)*_dy;
+                }
+            }    
         }
 
         KOKKOS_INLINE_FUNCTION

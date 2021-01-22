@@ -104,14 +104,17 @@ class CellComplex {
         using local_grid_h_t = typename local_grid_d_t::HostMirror;
         local_grid_d_t grid_view_d;
         local_grid_h_t grid_view_h;
-        Cajete::BrickGrid2D<double> _grid;
+        Cajete::BrickGrid2D<double> _global_grid;
         
         struct BuildLocalGridTag{};
         using BuildLocalGridTagPolicy = Kokkos::RangePolicy<execution_space, BuildLocalGridTag>;
 
         KOKKOS_INLINE_FUNCTION
         void operator()(const BuildLocalGridTag&, const int i) const {
-            grid_view_d(i).init(0.0, 0.0, 3.0, 3.0, 1.0, 1.0);
+            double x_min, y_min, x_max, y_max;
+            _global_grid.minMaxCellCorners(2, 1, x_min, y_min, x_max, y_max);
+            printf("%f %f %f %f\n", x_min, y_min, x_max, y_max);
+            grid_view_d(i).init(0.0, 0.0, 2.0, 2.0, 1.0, 1.0);
             int ncell = grid_view_d(i).totalNumCells();
             printf("GPU : %d : %d\n", i, ncell);
 
@@ -130,11 +133,11 @@ class CellComplex {
         CellComplex() {}
 
         CellComplex(double grid_min[2], double grid_max[2], double grid_delta[2]) 
-            : _grid(grid_min[0], grid_min[1],
+            : _global_grid(grid_min[0], grid_min[1],
                     grid_max[0], grid_max[1],
                     grid_delta[0], grid_delta[1]) 
         {
-            grid_view_d = local_grid_d_t("local", _grid.totalNumCells());
+            grid_view_d = local_grid_d_t("local", _global_grid.totalNumCells());
             grid_view_h = Kokkos::create_mirror_view(grid_view_d);
 
             build_local_grid();
