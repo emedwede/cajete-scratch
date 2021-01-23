@@ -11,3 +11,5 @@ include_directories(SimpleCajete_lib)
 add_subdirectory(SimpleCajete_lib)
 
 add_subdirectory(Catch_tests)
+
+add_subdirectory(examples)
