@@ -1,14 +1,16 @@
 #include <Cabana_Core.hpp>
 #include <Kokkos_Core.hpp>
 #include <iostream>
+#include <string>
 
 template<class SliceType>
-void print(SliceType& slice) {
-    std::cout << "[";
+void print(SliceType& slice, std::string msg="") {
+    std::cout << msg << ": [";
     for(auto i = 0; i < slice.size(); i++) {
         std::cout << " " << slice(i) << " ";
     } std::cout << "]\n";
 }
+
 
 KOKKOS_INLINE_FUNCTION
 int locatePoint(int x) {
@@ -76,7 +78,7 @@ int main(int argc, char *argv[]) {
 
     Kokkos::RangePolicy<ExecutionSpace> particle_range_policy(0, n_p);
 
-    auto counts_sv = Kokkos::Experimental::create_scatter_view( counts );
+    /*auto counts_sv = Kokkos::Experimental::create_scatter_view( counts );
     
     //cell count function
     auto cell_count = KOKKOS_LAMBDA(const std::size_t p) {
@@ -88,7 +90,16 @@ int main(int argc, char *argv[]) {
     Kokkos::parallel_for("Build cell list cell count", particle_range_policy, cell_count);
     Kokkos::fence();
     Kokkos::Experimental::contribute(counts, counts_sv);
+    */
 
+    //A less experimental and more straightforward way
+    Kokkos::deep_copy(counts, 0);
+    auto cell_count_atomic = KOKKOS_LAMBDA(const std::size_t p) {
+        int cell_id = locatePoint(positions_d(p));
+        Kokkos::atomic_increment(&counts(cell_id));
+    };
+    Kokkos::parallel_for("Build cell list cell count", particle_range_policy, cell_count_atomic);
+    Kokkos::fence();
     //compute offsets
     Kokkos::RangePolicy<ExecutionSpace> cell_range_policy(0, ncell);
     auto offset_scan = KOKKOS_LAMBDA(const size_t c, 
@@ -120,19 +131,9 @@ int main(int argc, char *argv[]) {
     Kokkos::deep_copy(counts_h, counts);
     Kokkos::deep_copy(offsets_h, offsets);
 
-    std::cout << "\nCounts: [";
-    for(auto i = 0; i < counts_h.size(); i++) {
-        std::cout << " " << counts_h(i) << " ";
-    } std::cout << "]\n";
-    
-    std::cout << "\nOffsets: [";
-    for(auto i = 0; i < offsets_h.size(); i++) {
-        std::cout << " " << offsets_h(i) << " ";
-    } std::cout << "]\n";
+    print(counts_h, "\nCounts");
+    print(offsets_h, "\nOffsets");
+    print(permute_h, "\nPermute");
 
-    std::cout << "\nPermute Vector: [";
-    for(auto i = 0; i < permute_h.size(); i++) {
-        std::cout << " " << permute_h(i) << " ";
-    } std::cout << "]\n";
     return 0;
 }
