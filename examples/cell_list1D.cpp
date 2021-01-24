@@ -13,7 +13,7 @@ void print(SliceType& slice, std::string msg="") {
 
 
 KOKKOS_INLINE_FUNCTION
-int locatePoint(int x) {
+int locatePoint(float x) {
     if(x < 3)
         return 0;
     else if(x >= 3 && x < 6) 
@@ -21,6 +21,46 @@ int locatePoint(int x) {
     else 
         return 2;
 }
+
+struct grid1D {
+    float _min_x;
+    float _max_x;
+    float _dx;
+    float _nx_g;
+    float _cs;  //reaction radius cell size
+    float _nx_l; //number of local xcells
+
+    grid1D(float max_x, float min_x, float dx, float rr) 
+        : _min_x(min_x), _max_x(max_x), _dx(dx), _cs(rr) 
+    {
+        _nx_g = cellsBetween(_max_x, _min_x, (1.0 / _dx) );
+        //adjusted dx to accomodate an integer number of cells
+        _dx   = ( _max_x - _min_x ) / _nx_g;  
+        //simple in this case because we have uniform partition
+        _nx_l = cellsBetween(_dx, 0.0, (1.0 / _cs ) );
+        //Adjusted cell size, should always be _cs >= rr
+        _cs   = ( _dx / _nx_l ); 
+    }
+
+    KOKKOS_INLINE_FUNCTION
+    int cellsBetween(const float max, const float min, const float rdelta) const {
+        return floor( (max - min) * rdelta);
+    }
+
+    KOKKOS_INLINE_FUNCTION
+    int locatePointGlobal(float xp) const {
+        int ic_g = cellsBetween(xp, _min_x, ( 1.0 / _dx ));
+        return ( ic_g == _nx_g ) ? ic_g - 1 : ic_g;
+    }
+
+    KOKKOS_INLINE_FUNCTION
+    int locatePointLocal(float xp) const {
+        int ic_g = locatePointGlobal(xp);
+        int ic_l = cellsBetween(xp, ic_g*_dx, _cs);
+        return ic_l;
+    }
+
+};
 
 int main(int argc, char *argv[]) {
 
@@ -34,11 +74,11 @@ int main(int argc, char *argv[]) {
     using ExecutionSpace = Kokkos::DefaultExecutionSpace;
     using DeviceType = Kokkos::Device<ExecutionSpace, MemorySpace>;
    
-    using NodeTypes = Cabana::MemberTypes<int>;
+    using NodeTypes = Cabana::MemberTypes<float>;
         
     using particle_t_d = Cabana::AoSoA<NodeTypes, DeviceType>;
     using particle_t_h = particle_t_d::host_mirror_type;
-    
+   
     //number of particles
     int n_p = 12;
 
@@ -51,7 +91,7 @@ int main(int argc, char *argv[]) {
     auto positions_h = Cabana::slice<0>(particles_h);
 
     //Preshuffled by me to avoid extra code
-    int shuffled_points[n_p] = {8, 10,  4,  5, 11,  6,  2,  9,  7,  3,  1,  0};
+    float shuffled_points[n_p] = {0.5, 8.75, 1.5, 8.25, 2.5, 7.75, 3.5, 7.25, 4.5, 6.75, 5.5, 6.25};
 
     //set particles on host
     for(auto i = 0; i < particles_h.size(); i++) {
@@ -62,8 +102,10 @@ int main(int argc, char *argv[]) {
     
     print(positions_h);
 
+    grid1D grid(9.0, 0.0, 3.0, 1.0);
+    
     //Create the binning data
-    std::size_t ncell = 3;
+    int ncell = grid._nx_g;
 
     using view1D_d_t = Kokkos::View<int*, MemorySpace>; 
     using view1D_h_t = view1D_d_t::HostMirror;
@@ -95,7 +137,7 @@ int main(int argc, char *argv[]) {
     //A less experimental and more straightforward way
     Kokkos::deep_copy(counts, 0);
     auto cell_count_atomic = KOKKOS_LAMBDA(const std::size_t p) {
-        int cell_id = locatePoint(positions_d(p));
+        int cell_id = grid.locatePointGlobal(positions_d(p));
         Kokkos::atomic_increment(&counts(cell_id));
     };
     Kokkos::parallel_for("Build cell list cell count", particle_range_policy, cell_count_atomic);
@@ -120,7 +162,7 @@ int main(int argc, char *argv[]) {
     //create the permute vector, i.e. our indirection cell list
     auto create_permute = KOKKOS_LAMBDA(const size_t p) 
     {
-        int cell_id = locatePoint(positions_d(p));
+        int cell_id = grid.locatePointGlobal(positions_d(p));
         int c = Kokkos::atomic_fetch_add( &counts(cell_id), 1 );
         permute(offsets(cell_id)+c) = p;
     };
