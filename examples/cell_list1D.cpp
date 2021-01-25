@@ -373,5 +373,36 @@ int main(int argc, char *argv[]) {
     CellList<DeviceType> cell_list_global(my_slice, 0.0, 9.0, 3.0, 1.0);
     LLCellList<DeviceType> cell_list_local(my_slice, 0.0, 9.0, 3.0, 1.0);
     cell_list_local.show();
+    
+    //needed for correct cuda capture
+    auto const& _cell_list_local = cell_list_local;
+
+    using NeighborAccessPolicy = 
+        Kokkos::TeamPolicy<ExecutionSpace, 
+        Kokkos::IndexType<int>, 
+        Kokkos::Schedule<Kokkos::Dynamic>>;
+
+    int ncells_g = cell_list_local._counts_d.size();
+    NeighborAccessPolicy access_policy(ncells_g, Kokkos::AUTO);//, 4);
+    auto neighbor_access = KOKKOS_LAMBDA(NeighborAccessPolicy::member_type team) {
+        int cell_g  = team.league_rank();
+        int t_r = team.team_rank();
+        if(t_r == 0) {
+            int l_r = team.league_rank();
+            int t_s = team.team_size();
+            int c = _cell_list_local._counts_d(cell_g);
+            printf("Global Cell %d has team size %d\n", l_r, t_s);
+            printf("Golbal Cell %d has %d particles\n", l_r, c);
+        }
+
+        int ncell_l = _cell_list_local.grid._nx_l;
+        int np_l = _cell_list_local._counts_d(cell_g);
+        Kokkos::parallel_for(Kokkos::TeamThreadRange(team, 0, np_l), [&](const int bi) {
+            int l_r = team.league_rank();
+            printf("Inside Global Cell %d visiting Particle %d\n", l_r, bi);
+        });
+    };
+    Kokkos::parallel_for("Access LLCellList Nbrs", access_policy, neighbor_access);
+
     return 0;
 }
