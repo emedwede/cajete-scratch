@@ -45,8 +45,8 @@ struct grid1D {
     KOKKOS_INLINE_FUNCTION
     int locatePointLocal(float xp) const {
         int ic_g = locatePointGlobal(xp);
-        int ic_l = cellsBetween(xp, ic_g*_dx, _cs);
-        return ic_l;
+        int ic_l = cellsBetween(xp, ic_g*_dx, 1.0 / _cs);
+        return (ic_l == _nx_l) ? ic_l - 1 : ic_l;
     }
 
 };
@@ -203,26 +203,153 @@ struct CellList {
     }
         
 };
-    int main(int argc, char *argv[]) {
 
-        //Initialize the kokkos runtime
-        Kokkos::ScopeGuard scope_guard(argc, argv);
+template <class DeviceType>
+struct LLCellList {
+    using device = DeviceType;
+    using memory_space = typename device::memory_space;
+    using execution_space = typename device::execution_space;
+
+    using view1D_d_t = Kokkos::View<int*, memory_space>; 
+    using view1D_h_t = typename view1D_d_t::HostMirror;
+    
+    grid1D grid;
+
+    template<class SliceType> 
+    LLCellList (SliceType positions, 
+              float min, float max, 
+              float dx, float rr) 
+              : grid(max, min, dx, rr)
+    { build(positions); }
+
+    template<class SliceType>
+    void build(SliceType positions) {
+        //Get a copy of grid for cuda
+        auto const& _grid = grid;
+        int ncell = _grid._nx_g; 
+        int ncell_l = _grid._nx_l; //Number of local cells
+        int n_p = positions.size(); 
+
+
+        view1D_d_t counts_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "counts"),ncell);
+        view1D_d_t offsets_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "offsets"),ncell);
         
-        printf("On Kokkos execution space %s\n", 
-             typeid(Kokkos::DefaultExecutionSpace).name());
-        
-        using MemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
-        using ExecutionSpace = Kokkos::DefaultExecutionSpace;
-        using DeviceType = Kokkos::Device<ExecutionSpace, MemorySpace>;
+        view1D_h_t counts_h = Kokkos::create_mirror_view(counts_d);
+        view1D_h_t offsets_h = Kokkos::create_mirror_view(offsets_d);
        
-        int n_p = 12; //number of particles
-        p_array1D<DeviceType> particles(n_p);
-        preset(particles);
-        print(particles.positions_h);
+        view1D_d_t counts_l_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "counts"),ncell*ncell_l);
+        view1D_d_t offsets_l_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "offsets"),ncell*ncell_l);
+        view1D_d_t permute_l_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "permute"),n_p);
+        
+        view1D_h_t counts_l_h = Kokkos::create_mirror_view(counts_l_d);
+        view1D_h_t offsets_l_h = Kokkos::create_mirror_view(offsets_l_d);
+        view1D_h_t permute_l_h = Kokkos::create_mirror_view(permute_l_d);
+ 
+        Kokkos::RangePolicy<execution_space> particle_range_policy(0, n_p);
+        
+        //A less experimental and more straightforward way
+        Kokkos::deep_copy(counts_d, 0);
+        auto cell_count_atomic = KOKKOS_LAMBDA(const std::size_t p) {
+            int cell_id = _grid.locatePointGlobal(positions(p));
+            Kokkos::atomic_increment(&counts_d(cell_id));
+        };
+        
+        Kokkos::parallel_for("Build cell list cell count", particle_range_policy, cell_count_atomic);
+        Kokkos::fence();
+       
+        Kokkos::deep_copy(counts_l_d, 0);
+        auto local_cell_count_atomic = KOKKOS_LAMBDA(const std::size_t p) {
+            int cell_id = _grid.locatePointGlobal(positions(p));
+            int cell_id_local = _grid.locatePointLocal(positions(p));
+            Kokkos::atomic_increment(&counts_l_d(cell_id*ncell+cell_id_local));
+        };
+        
+        Kokkos::parallel_for("Build cell list local cell count", particle_range_policy, local_cell_count_atomic);
+        Kokkos::fence();
+        
+
+        //compute offsets
+        Kokkos::RangePolicy<execution_space> cell_range_policy(0, ncell);
+        auto offset_scan = KOKKOS_LAMBDA(const size_t c, 
+                                         int& update, 
+                                         const bool final_pass) 
+        {
+            if(final_pass)
+                offsets_d(c) = update;
+            update += counts_d(c);
+        };
+
+        Kokkos::parallel_scan("Build cell list offset scan", cell_range_policy, offset_scan);
+        Kokkos::fence();
+
+        //compute offsets
+        Kokkos::RangePolicy<execution_space> cell_range_policy_local(0, ncell*ncell_l);
+        auto offset_scan_local = KOKKOS_LAMBDA(const size_t c, 
+                                         int& update, 
+                                         const bool final_pass) 
+        {
+            if(final_pass)
+                offsets_l_d(c) = update;
+            update += counts_l_d(c);
+        };
+
+        Kokkos::parallel_scan("Build cell list offset scan", cell_range_policy_local, offset_scan_local);
+        Kokkos::fence();
+
+        //Reset local counts
+        Kokkos::deep_copy(counts_l_d, 0);
+
+        //create the permute vector on the local scale, i.e. our indirection cell list
+        auto create_permute_local = KOKKOS_LAMBDA(const size_t p) 
+        {
+            int cell_id = _grid.locatePointGlobal(positions(p));
+            int local_cell_id = _grid.locatePointLocal(positions(p));
+            int c = Kokkos::atomic_fetch_add( &counts_l_d(cell_id*ncell+local_cell_id), 1 );
+            permute_l_d(offsets_l_d(cell_id*ncell+local_cell_id)+c) = p;
+        };
+
+        Kokkos::parallel_for("Build local permute list", particle_range_policy, create_permute_local);
 
 
-        auto my_slice = Cabana::slice<0>(particles.particles_d); 
-        CellList<DeviceType> cell_list(my_slice, 0.0, 9.0, 3.0, 1.0);
 
-        return 0;
+        Kokkos::deep_copy(counts_h, counts_d);
+        Kokkos::deep_copy(offsets_h, offsets_d); 
+        
+        print(counts_h, "\nGlobal Cell Counts");
+        print(offsets_h, "\nGlobal Cell Offsets");
+
+        Kokkos::deep_copy(counts_l_h, counts_l_d);
+        Kokkos::deep_copy(offsets_l_h, offsets_l_d);
+        Kokkos::deep_copy(permute_l_h, permute_l_d);
+
+        print(counts_l_h, "\nLocal Counts");
+        print(offsets_l_h, "\nLocal Offsets");
+        print(permute_l_h, "\nLocal Permute");
     }
+        
+};
+
+int main(int argc, char *argv[]) {
+
+    //Initialize the kokkos runtime
+    Kokkos::ScopeGuard scope_guard(argc, argv);
+    
+    printf("On Kokkos execution space %s\n", 
+         typeid(Kokkos::DefaultExecutionSpace).name());
+    
+    using MemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
+    using ExecutionSpace = Kokkos::DefaultExecutionSpace;
+    using DeviceType = Kokkos::Device<ExecutionSpace, MemorySpace>;
+   
+    int n_p = 12; //number of particles
+    p_array1D<DeviceType> particles(n_p);
+    preset(particles);
+    print(particles.positions_h);
+
+
+    auto my_slice = Cabana::slice<0>(particles.particles_d); 
+    CellList<DeviceType> cell_list_global(my_slice, 0.0, 9.0, 3.0, 1.0);
+    LLCellList<DeviceType> cell_list_local(my_slice, 0.0, 9.0, 3.0, 1.0);
+    
+    return 0;
+}
