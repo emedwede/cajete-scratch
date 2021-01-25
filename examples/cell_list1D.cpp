@@ -11,17 +11,6 @@ void print(SliceType& slice, std::string msg="") {
     } std::cout << "]\n";
 }
 
-
-KOKKOS_INLINE_FUNCTION
-int locatePoint(float x) {
-    if(x < 3)
-        return 0;
-    else if(x >= 3 && x < 6) 
-        return 1;
-    else 
-        return 2;
-}
-
 struct grid1D {
     float _min_x;
     float _max_x;
@@ -62,120 +51,178 @@ struct grid1D {
 
 };
 
-int main(int argc, char *argv[]) {
+template<class DeviceType>
+struct p_array1D {
 
-    //Initialize the kokkos runtime
-    Kokkos::ScopeGuard scope_guard(argc, argv);
-    
-    printf("On Kokkos execution space %s\n", 
-         typeid(Kokkos::DefaultExecutionSpace).name());
-    
-    using MemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
-    using ExecutionSpace = Kokkos::DefaultExecutionSpace;
-    using DeviceType = Kokkos::Device<ExecutionSpace, MemorySpace>;
-   
     using NodeTypes = Cabana::MemberTypes<float>;
+    
+    using particles_t_d = Cabana::AoSoA<NodeTypes, DeviceType>;
+    using positions_t_d = typename particles_t_d::template member_slice_type<0>;
+
+    using particles_t_h = typename particles_t_d::host_mirror_type;
+    using positions_t_h = typename particles_t_h::template member_slice_type<0>;
+
+    particles_t_d particles_d;
+    particles_t_h particles_h;
+
+    positions_t_d positions_d;
+    positions_t_h positions_h;
+
+    p_array1D(int n_p) 
+        : particles_d("Particles on Device", n_p)
+        , particles_h("Particles on Host", n_p)
+        , positions_d(Cabana::slice<0>(particles_d))
+        , positions_h(Cabana::slice<0>(particles_h))
+    {
         
-    using particle_t_d = Cabana::AoSoA<NodeTypes, DeviceType>;
-    using particle_t_h = particle_t_d::host_mirror_type;
-   
-    //number of particles
-    int n_p = 12;
-
-    //create particle aosoas
-    particle_t_d particles_d("Particles on Device", n_p);
-    particle_t_h particles_h("Particles on Host", n_p);
-
-    //slice the particle aosoas
-    auto positions_d = Cabana::slice<0>(particles_d);
-    auto positions_h = Cabana::slice<0>(particles_h);
-
-    //Preshuffled by me to avoid extra code
-    float shuffled_points[n_p] = {0.5, 8.75, 1.5, 8.25, 2.5, 7.75, 3.5, 7.25, 4.5, 6.75, 5.5, 6.25};
-
-    //set particles on host
-    for(auto i = 0; i < particles_h.size(); i++) {
-        positions_h(i) = shuffled_points[i];
     }
-    //copy host particles to device
-    Cabana::deep_copy(particles_d, particles_h);
-    
-    print(positions_h);
 
-    grid1D grid(9.0, 0.0, 3.0, 1.0);
-    
-    //Create the binning data
-    int ncell = grid._nx_g;
+    void reslice() {
+        positions_d = Cabana::slice<0>(particles_d);
+        positions_h = Cabana::slice<0>(particles_h);
+    }
 
-    using view1D_d_t = Kokkos::View<int*, MemorySpace>; 
-    using view1D_h_t = view1D_d_t::HostMirror;
+    void copy_host_to_device() {
+        Cabana::deep_copy(positions_d, positions_h);
+        reslice();
+    }
 
-    view1D_d_t counts(Kokkos::view_alloc(Kokkos::WithoutInitializing, "counts"),ncell);
-    view1D_d_t offsets(Kokkos::view_alloc(Kokkos::WithoutInitializing, "offsets"),ncell);
-    view1D_d_t permute(Kokkos::view_alloc(Kokkos::WithoutInitializing, "permute"),n_p);
-    
-    view1D_h_t counts_h = Kokkos::create_mirror_view(counts);
-    view1D_h_t offsets_h = Kokkos::create_mirror_view(offsets);
-    view1D_h_t permute_h = Kokkos::create_mirror_view(permute);
+    void copy_device_to_host() {
+        Cabana::deep_copy(positions_h, positions_d);
+        reslice();
+    }
 
-    Kokkos::RangePolicy<ExecutionSpace> particle_range_policy(0, n_p);
+};
 
-    /*auto counts_sv = Kokkos::Experimental::create_scatter_view( counts );
-    
-    //cell count function
-    auto cell_count = KOKKOS_LAMBDA(const std::size_t p) {
-        int cell_id = locatePoint(positions_d(p));
-        auto counts_data = counts_sv.access();
-        counts_data(cell_id) += 1;
-    };
-    
-    Kokkos::parallel_for("Build cell list cell count", particle_range_policy, cell_count);
-    Kokkos::fence();
-    Kokkos::Experimental::contribute(counts, counts_sv);
-    */
-
-    //A less experimental and more straightforward way
-    Kokkos::deep_copy(counts, 0);
-    auto cell_count_atomic = KOKKOS_LAMBDA(const std::size_t p) {
-        int cell_id = grid.locatePointGlobal(positions_d(p));
-        Kokkos::atomic_increment(&counts(cell_id));
-    };
-    Kokkos::parallel_for("Build cell list cell count", particle_range_policy, cell_count_atomic);
-    Kokkos::fence();
-    //compute offsets
-    Kokkos::RangePolicy<ExecutionSpace> cell_range_policy(0, ncell);
-    auto offset_scan = KOKKOS_LAMBDA(const size_t c, 
-                                     int& update, 
-                                     const bool final_pass) 
-    {
-        if(final_pass)
-            offsets(c) = update;
-        update += counts(c);
-    };
-
-    Kokkos::parallel_scan("Build cell list offset scan", cell_range_policy, offset_scan);
-    Kokkos::fence();
-
-    //Reset counts
-    Kokkos::deep_copy(counts, 0);
-
-    //create the permute vector, i.e. our indirection cell list
-    auto create_permute = KOKKOS_LAMBDA(const size_t p) 
-    {
-        int cell_id = grid.locatePointGlobal(positions_d(p));
-        int c = Kokkos::atomic_fetch_add( &counts(cell_id), 1 );
-        permute(offsets(cell_id)+c) = p;
-    };
-
-    Kokkos::parallel_for("Build permute list", particle_range_policy, create_permute);
-
-    Kokkos::deep_copy(permute_h, permute);
-    Kokkos::deep_copy(counts_h, counts);
-    Kokkos::deep_copy(offsets_h, offsets);
-
-    print(counts_h, "\nCounts");
-    print(offsets_h, "\nOffsets");
-    print(permute_h, "\nPermute");
-
-    return 0;
+//Preset the data for our example
+template<class DeviceType>
+void preset(p_array1D<DeviceType>& p_array) {
+    //Preshuffled by me to avoid extra code
+    float shuffled_points[12] = {0.5, 8.75, 1.5, 8.25, 2.5, 7.75, 3.5, 7.25, 4.5, 6.75, 5.5, 6.25};    
+    //set particles on host
+    for(auto i = 0; i < 12; i++) {
+        p_array.positions_h(i) = shuffled_points[i];
+    }
+    p_array.copy_host_to_device();
 }
+
+template <class DeviceType>
+struct CellList {
+    using device = DeviceType;
+    using memory_space = typename device::memory_space;
+    using execution_space = typename device::execution_space;
+
+    using view1D_d_t = Kokkos::View<int*, memory_space>; 
+    using view1D_h_t = typename view1D_d_t::HostMirror;
+    
+    grid1D grid;
+
+    template<class SliceType> 
+    CellList (SliceType positions, 
+              float min, float max, 
+              float dx, float rr) 
+              : grid(max, min, dx, rr)
+    { build(positions); }
+
+    template<class SliceType>
+    void build(SliceType positions) {
+        //Get a copy of grid for cuda
+        auto const& _grid = grid;
+        int ncell = _grid._nx_g;
+        int n_p = positions.size(); 
+
+
+        view1D_d_t counts_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "counts"),ncell);
+        view1D_d_t offsets_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "offsets"),ncell);
+        view1D_d_t permute_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "permute"),n_p);
+        
+        view1D_h_t counts_h = Kokkos::create_mirror_view(counts_d);
+        view1D_h_t offsets_h = Kokkos::create_mirror_view(offsets_d);
+        view1D_h_t permute_h = Kokkos::create_mirror_view(permute_d);
+        
+        Kokkos::RangePolicy<execution_space> particle_range_policy(0, n_p);
+        
+        /*auto counts_sv = Kokkos::Experimental::create_scatter_view( counts );
+        
+        //cell count function
+        auto cell_count = KOKKOS_LAMBDA(const std::size_t p) {
+            int cell_id = locatePoint(positions_d(p));
+            auto counts_data = counts_sv.access();
+            counts_data(cell_id) += 1;
+        };
+        
+        Kokkos::parallel_for("Build cell list cell count", particle_range_policy, cell_count);
+        Kokkos::fence();
+        Kokkos::Experimental::contribute(counts, counts_sv);
+        */
+
+        //A less experimental and more straightforward way
+        Kokkos::deep_copy(counts_d, 0);
+        auto cell_count_atomic = KOKKOS_LAMBDA(const std::size_t p) {
+            int cell_id = _grid.locatePointGlobal(positions(p));
+            Kokkos::atomic_increment(&counts_d(cell_id));
+        };
+        
+        Kokkos::parallel_for("Build cell list cell count", particle_range_policy, cell_count_atomic);
+        Kokkos::fence();
+        
+        //compute offsets
+        Kokkos::RangePolicy<execution_space> cell_range_policy(0, ncell);
+        auto offset_scan = KOKKOS_LAMBDA(const size_t c, 
+                                         int& update, 
+                                         const bool final_pass) 
+        {
+            if(final_pass)
+                offsets_d(c) = update;
+            update += counts_d(c);
+        };
+
+        Kokkos::parallel_scan("Build cell list offset scan", cell_range_policy, offset_scan);
+        Kokkos::fence();
+
+        //Reset counts
+        Kokkos::deep_copy(counts_d, 0);
+
+        //create the permute vector, i.e. our indirection cell list
+        auto create_permute = KOKKOS_LAMBDA(const size_t p) 
+        {
+            int cell_id = _grid.locatePointGlobal(positions(p));
+            int c = Kokkos::atomic_fetch_add( &counts_d(cell_id), 1 );
+            permute_d(offsets_d(cell_id)+c) = p;
+        };
+
+        Kokkos::parallel_for("Build permute list", particle_range_policy, create_permute);
+
+        Kokkos::deep_copy(permute_h, permute_d);
+        Kokkos::deep_copy(counts_h, counts_d);
+        Kokkos::deep_copy(offsets_h, offsets_d); 
+        
+        print(counts_h, "\nCounts");
+        print(offsets_h, "\nOffsets");
+        print(permute_h, "\nPermute");
+    }
+        
+};
+    int main(int argc, char *argv[]) {
+
+        //Initialize the kokkos runtime
+        Kokkos::ScopeGuard scope_guard(argc, argv);
+        
+        printf("On Kokkos execution space %s\n", 
+             typeid(Kokkos::DefaultExecutionSpace).name());
+        
+        using MemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
+        using ExecutionSpace = Kokkos::DefaultExecutionSpace;
+        using DeviceType = Kokkos::Device<ExecutionSpace, MemorySpace>;
+       
+        int n_p = 12; //number of particles
+        p_array1D<DeviceType> particles(n_p);
+        preset(particles);
+        print(particles.positions_h);
+
+
+        auto my_slice = Cabana::slice<0>(particles.particles_d); 
+        CellList<DeviceType> cell_list(my_slice, 0.0, 9.0, 3.0, 1.0);
+
+        return 0;
+    }
