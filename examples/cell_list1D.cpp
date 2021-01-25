@@ -204,6 +204,7 @@ struct CellList {
         
 };
 
+
 template <class DeviceType>
 struct LLCellList {
     using device = DeviceType;
@@ -214,6 +215,18 @@ struct LLCellList {
     using view1D_h_t = typename view1D_d_t::HostMirror;
     
     grid1D grid;
+    
+    view1D_d_t _counts_d;
+    view1D_h_t _counts_h;
+    view1D_d_t _offsets_d;
+    view1D_h_t _offsets_h;
+    
+    view1D_d_t _counts_l_d;
+    view1D_h_t _counts_l_h;
+    view1D_d_t _offsets_l_d;
+    view1D_h_t _offsets_l_h;
+    view1D_d_t _permute_l_d;
+    view1D_h_t _permute_l_h;
 
     template<class SliceType> 
     LLCellList (SliceType positions, 
@@ -310,21 +323,30 @@ struct LLCellList {
 
         Kokkos::parallel_for("Build local permute list", particle_range_policy, create_permute_local);
 
-
-
         Kokkos::deep_copy(counts_h, counts_d);
         Kokkos::deep_copy(offsets_h, offsets_d); 
-        
-        print(counts_h, "\nGlobal Cell Counts");
-        print(offsets_h, "\nGlobal Cell Offsets");
-
         Kokkos::deep_copy(counts_l_h, counts_l_d);
         Kokkos::deep_copy(offsets_l_h, offsets_l_d);
         Kokkos::deep_copy(permute_l_h, permute_l_d);
 
-        print(counts_l_h, "\nLocal Counts");
-        print(offsets_l_h, "\nLocal Offsets");
-        print(permute_l_h, "\nLocal Permute");
+        _counts_d = counts_d;
+        _counts_h = counts_h;
+        _offsets_d = offsets_d;
+        _offsets_h = offsets_h;
+        _counts_l_d = counts_l_d;
+        _counts_l_h = counts_l_h;
+        _offsets_l_d = offsets_l_d;
+        _offsets_l_h = offsets_l_h;
+        _permute_l_d = permute_l_d;
+        _permute_l_h = permute_l_h;
+    }   
+
+    void show() {
+        print(_counts_h, "\nGlobal Cell Counts");
+        print(_offsets_h, "\nGlobal Cell Offsets");
+        print(_counts_l_h, "\nLocal Counts");
+        print(_offsets_l_h, "\nLocal Offsets");
+        print(_permute_l_h, "\nLocal Permute");
     }
         
 };
@@ -350,6 +372,6 @@ int main(int argc, char *argv[]) {
     auto my_slice = Cabana::slice<0>(particles.particles_d); 
     CellList<DeviceType> cell_list_global(my_slice, 0.0, 9.0, 3.0, 1.0);
     LLCellList<DeviceType> cell_list_local(my_slice, 0.0, 9.0, 3.0, 1.0);
-    
+    cell_list_local.show();
     return 0;
 }
