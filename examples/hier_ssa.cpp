@@ -7,6 +7,7 @@
 
 using MemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
 using ExecutionSpace = Kokkos::DefaultExecutionSpace;
+//using ExecutionSpace = Kokkos::Serial;//Kokkos::DefaultExecutionSpace;
 using DeviceType = Kokkos::Device<ExecutionSpace, MemorySpace>;
     
 using kokkos_rng_pool_t = Kokkos::Random_XorShift64_Pool<ExecutionSpace>;
@@ -34,52 +35,63 @@ int main(int argc, char *argv[]) {
     kokkos_rng_pool_t rand_pool(seed);
 
     using TestPolicy = Kokkos::TeamPolicy<ExecutionSpace>;
-    //seems to be where it maxes on GPU? (MOBILE GTX1060)
-    int num_cells = 320; 
+    //320 cells seems to be where it maxes on GPU? (MOBILE GTX1060) 
     double DELTA = 0.1;
-    int NUM_INTERNAL_STEPS = 1000000;
+    int NUM_INTERNAL_STEPS = 5000;
     double DELTA_DELTA_T = DELTA / NUM_INTERNAL_STEPS;
 
-    TestPolicy test_policy(num_cells, Kokkos::AUTO);
-
+    
     const auto& _r_p = rand_pool;
 
     //could be replaced by scratch pad memory I think
     //Motivation: shared data between threads in a team
     //really, only the random sample needs to be single, but
     //it's easier on the brain if redundant work is not repeated
-    Kokkos::View<double*> exp_sample("Exp Samples", num_cells);
-    Kokkos::View<double*> tau("Tau", num_cells); 
-    Kokkos::View<double*> delta_t("Delta_t", num_cells);
-
+    int num_cells = 200;
+    Kokkos::View<double*> _exp_sample("Exp Samples", num_cells);
+    Kokkos::View<double*> _tau("Tau", num_cells); 
+    Kokkos::View<double*> _delta_t("Delta_t", num_cells);
+    Kokkos::View<double*> _events("Events", num_cells); 
+    typedef ExecutionSpace::scratch_memory_space ScratchSpace;
+    typedef Kokkos::View<double, ScratchSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> shared_double;
     auto test_hier = KOKKOS_LAMBDA(TestPolicy::member_type team_member) {
-        
+        auto rand_gen = _r_p.get_state(); 
         int cell = team_member.league_rank();
         int t_r = team_member.team_rank();
-
-        //Each team runs it's own shared simulation, so we need to have
+        //shared_double test(team_member.team_scratch(0)); 
+       
+        //Each team runs it's own shared simulation, so we could  have
         //the starting time set by only one thread and block until we are done
-        Kokkos::single(Kokkos::PerTeam(team_member), [=] () {
-            delta_t(cell) = 0.0;    
-        });
-        team_member.team_barrier();
+        //But, it doesn't really matter, so we'll give each local thread a copy
+        double delta_t = 0.0; 
         
+        //equivalent to Kokkos::single
+        if(t_r == 0) {
+            //make sure no events are tracked yet
+            _events(cell) = 0;
+        }
+        team_member.team_barrier();
+
         //All threads need to run this loop to meet the TeamThreadRange kernel
-        while(delta_t(cell) < DELTA) {
+        while(delta_t < DELTA) {
             //Each team needs only one exponential sample, so we use
             //a single threads to set it and block all others from continuing
-            //unitl we are done
-            Kokkos::single(Kokkos::PerTeam(team_member), [=] () {
-                double uniform_sample = uniform(_r_p, 0.0, 1.0);
-                exp_sample(cell) = -log(1-uniform_sample);
-                tau(cell) = 0.0;
-                //printf("Exp Sample in Cell %d on thread %d is %f\n", cell, t_r, exp_sample(cell));
+            //until we are done
+            Kokkos::single(Kokkos::PerTeam(team_member), [&] () {
+                double uniform_sample = rand_gen.drand(0.0, 1.0);
+                //uniform_sample = 0.5;
+                _exp_sample(cell) = -log(1-uniform_sample);
+                _tau(cell) = 0.0;
             });
             team_member.team_barrier();
-            int counter = 0; 
+            double counter = 0.0; //currently used to force the compiler not to optimize 
+            
+            //set the local tau and cache the exp sample
+            double tau = _tau(cell);
+            double exp_sample = _exp_sample(cell);
+            
             //All threads need to run this loop to meet the TeamThreadRange kernel
-            while(delta_t(cell) < DELTA && tau(cell) < exp_sample(cell)) {
-                
+            while(delta_t < DELTA && tau < exp_sample) {  
                 //STEP (1) : solve system of particle odes
                 //BARRIER: allow for updated particles to be used in (2) 
 
@@ -96,39 +108,53 @@ int main(int argc, char *argv[]) {
                 //BARRIER
 
                 //Combination of (3) and (4)
-                Kokkos::single(Kokkos::PerTeam(team_member), [=] () {
-                    tau(cell) += uniform(_r_p, 0.0, 0.1); //temporary placeholder of step (3)
-                    //Advance inner time
-                    delta_t(cell) += DELTA_DELTA_T;
-                    //printf("Cell %d Step %d\n", cell, counter);
+                Kokkos::single(Kokkos::PerTeam(team_member), [&] () {
+                    double tau_samp = rand_gen.drand(0.001, 0.01);
+                    _tau(cell) += tau_samp;
+                    //printf("Tau %f\n", tau_samp);
+                    //_tau(cell) += 0.001;
                 });
                 team_member.team_barrier();
-                counter++;
-                Kokkos::parallel_for(Kokkos::TeamThreadRange(team_member, 0, 2), [&](const int j) {
-                    //printf("In Cell %d Inside loop %d on count %d\n", cell, i, j);
-                });
-                team_member.team_barrier();
+                tau = _tau(cell);
+                delta_t += DELTA_DELTA_T;
+                
+                for(auto i = 0; i < 2500; i++) {
+                    double samp = rand_gen.drand(0.0, 1.0);
+                    counter = i*delta_t*samp;
+                }
+                
+                counter += 1.0; 
             }
-            
+            team_member.team_barrier();
+
             //If we determined an event has occured, we need to block all other threads
             //and do some work(it's possible this may not be a fully single thread process)
-            Kokkos::single(Kokkos::PerTeam(team_member), [=] () {
-                if (tau(cell) > exp_sample(cell)) {
-                    //printf("An event has occured in cell %d\n", cell);
+            Kokkos::single(Kokkos::PerTeam(team_member), [&] () {
+                if (_tau(cell) > _exp_sample(cell)) {
+                    //view are default alloc to zero
+                    _events(cell)++;
                 }
             });
-            team_member.team_barrier();    
+            team_member.team_barrier();     
         }
-        if(t_r == 0)
-            printf("Cell %d done!\n", cell);
+        if(t_r == 0) {
+            int n_e = _events(cell);
+            //printf("%d events in cell %d\n", n_e, cell);
+        }
+        rand_pool.free_state(rand_gen); 
     };
-    
-    Kokkos::Timer timer;
-    Kokkos::parallel_for("Test", test_policy, test_hier);
-    Kokkos::fence();
-    auto time = timer.seconds();
-    std::cout << "Time: " << time << "\n";
-    
+    for(int i = 0; i <= 0; i++) {
+    for(int j = 0; j <= 4; j++) {
+        int num_cells = pow(2, j);
+        int num_threads = pow(2, i);
+        TestPolicy test_policy(num_cells, Kokkos::AUTO);//num_threads);//Kokkos::AUTO);
+        int team_size = test_policy.team_size();
+        Kokkos::Timer timer;
+        Kokkos::parallel_for("Test", test_policy, test_hier);
+        Kokkos::fence();
+        double time = timer.seconds();
+        printf("%d cells %d threads took %f seconds\n", num_cells, team_size, time);
+    }} 
  
     return 0;
 }

@@ -22,6 +22,15 @@ double uniform(const kokkos_rng_pool_t& r_p, const double low, const double high
     return r;
 }
 
+KOKKOS_INLINE_FUNCTION
+void compute_test(typename kokkos_rng_pool_t::generator_type& gen, const Kokkos::View<size_t*>& garbage, const size_t size, const size_t div) {
+    for(size_t i = 0; i < size; i++) {
+        for(size_t j = 0; j < size/div; j++) {
+            garbage(i) += i*j;
+            garbage(i) += gen.drand(0.0, 100.0);
+        }
+    }
+}
 int main(int argc, char *argv[]) {
 
     //Initialize the kokkos runtime
@@ -39,36 +48,35 @@ int main(int argc, char *argv[]) {
     //320 cells seems to be where it maxes on GPU? (MOBILE GTX1060)
 
     const auto& _r_p = rand_pool;
-    
+    size_t size = 1000000;
+    size_t div = 30000;
+    Kokkos::View<size_t*> garbage("garbage", size);
+    Kokkos::parallel_for("Test init", size, KOKKOS_LAMBDA(const size_t i) {
+        garbage(i) = i;
+    });
     auto test_hier = KOKKOS_LAMBDA(TestPolicy::member_type team_member) {
-        
+          
         int cell = team_member.league_rank();
-        double total = 0.0;
-        for (int i = 0; i < 5000000; i++) {
-            total += uniform(_r_p, 0.0, 1.0);
-        }
-        team_member.team_barrier();
-        if(team_member.team_rank() == 0) {
-            //printf("Job in cell %d has finished with total %f\n", cell, total);
-        }
+        
+        Kokkos::Random_XorShift64_Pool<ExecutionSpace>::generator_type rand_gen = _r_p.get_state(); 
+        compute_test(rand_gen, garbage, size, div);
+        _r_p.free_state(rand_gen);
     };
-    
-    auto test_par = KOKKOS_LAMBDA(const int tid) {
+   
+        auto test_par = KOKKOS_LAMBDA(const int tid) {
         
         int cell = tid;
-        double total = 0.0;
-        for (int i = 0; i < 5000000; i++) {
-            total += uniform(_r_p, 0.0, 1.0);
-        }
-    
-        //printf("Job in cell %d has finished with total %f\n", cell, total);
+        Kokkos::Random_XorShift64_Pool<ExecutionSpace>::generator_type rand_gen = _r_p.get_state();    
         
+        compute_test(rand_gen, garbage, size, div);
+        _r_p.free_state(rand_gen);
     };    
+    
     //TODO: prettify output
     //std::string headers[3] = {"Number of Cells", "Hier Time", "Par Time"};
     //std::cout << std::setw(headers[0].size()) << headers[0];
     
-    {std::string title = "Hierarchical Tests";
+    {std::string title = "KOKKOS Hierarchical Tests";
     std::cout << title << std::endl;;
     for(auto i = 0; i < title.size(); i++) {std::cout << "-";}
     std::cout << std::endl;
@@ -82,7 +90,7 @@ int main(int argc, char *argv[]) {
         std::cout << num_cells << " ran in "<< time << " seconds\n";
     }std::cout << "\n\n";}
     
-    {std::string title = "Parallel For Tests";
+    {std::string title = "KOKKOS Parallel For Tests";
     std::cout << title << std::endl;;
     for(auto i = 0; i < title.size(); i++) {std::cout << "-";}
     std::cout << std::endl;
@@ -95,7 +103,35 @@ int main(int argc, char *argv[]) {
         auto time = timer.seconds();
         std::cout << num_cells << " ran in "<< time << " seconds\n";
     }std::cout << "\n\n";}
- 
 
+    #ifdef KOKKOS_ENABLE_OPENMP
+    #ifndef KOKKOS_ENABLE_CUDA
+    {std::string title = "OMP Parallel For Tests";
+    std::cout << title << std::endl;;
+    using NUM = size_t;
+    for(int i = 0; i <= 4; i++) {
+        
+        int threads = pow(2, i);    
+        omp_set_num_threads(threads);
+        
+        NUM size = 1000000;
+        NUM vals[size];
+
+
+        auto start = std::chrono::high_resolution_clock::now();
+        //set the values 
+        #pragma omp parallel for
+
+        for(NUM k = 0; k < threads; k++) {
+            Kokkos::Random_XorShift64_Pool<ExecutionSpace>::generator_type rand_gen = _r_p.get_state(); 
+            compute_test(rand_gen, garbage, size, div);
+            _r_p.free_state(rand_gen);
+        }
+        auto stop = std::chrono::high_resolution_clock::now();
+        auto duration = std::chrono::duration<double>(stop - start);
+        std::cout << threads << " ran in " << duration.count() << " seconds\n";
+    }std::cout << "\n\n";}
+    #endif
+    #endif
     return 0;
 }
