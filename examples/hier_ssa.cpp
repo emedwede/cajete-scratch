@@ -4,6 +4,7 @@
 #include <iostream>
 #include <string>
 #include <chrono>
+#include <sstream>
 
 using MemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
 using ExecutionSpace = Kokkos::DefaultExecutionSpace;
@@ -26,9 +27,21 @@ int main(int argc, char *argv[]) {
 
     //Initialize the kokkos runtime
     Kokkos::ScopeGuard scope_guard(argc, argv);
-    
-    printf("On Kokkos execution space %s\n", 
-         typeid(Kokkos::DefaultExecutionSpace).name());
+    std::ostringstream msg;
+    printf("On Kokkos execution space %s\n", typeid(Kokkos::DefaultExecutionSpace).name());
+    msg << "{" << std::endl;
+    if (Kokkos::hwloc::available()) {
+        msg << "hwloc( NUMA[" << Kokkos::hwloc::get_available_numa_count()
+            << "] x CORE[" << Kokkos::hwloc::get_available_cores_per_numa()
+            << "] x HT[" << Kokkos::hwloc::get_available_threads_per_core() << "] )"
+            << std::endl;
+    }
+
+    #if defined(KOKKOS_ENABLE_CUDA)
+        Kokkos::Cuda::print_configuration(msg);
+    #endif
+    msg << "}" << std::endl;
+    std::cout << msg.str();
     
     std::size_t seed = 666;
     seed = std::chrono::system_clock::now().time_since_epoch().count();
@@ -47,48 +60,34 @@ int main(int argc, char *argv[]) {
     //Motivation: shared data between threads in a team
     //really, only the random sample needs to be single, but
     //it's easier on the brain if redundant work is not repeated
-    int num_cells = 200;
-    Kokkos::View<double*> _exp_sample("Exp Samples", num_cells);
-    Kokkos::View<double*> _tau("Tau", num_cells); 
-    Kokkos::View<double*> _delta_t("Delta_t", num_cells);
-    Kokkos::View<double*> _events("Events", num_cells); 
-    typedef ExecutionSpace::scratch_memory_space ScratchSpace;
-    typedef Kokkos::View<double, ScratchSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>> shared_double;
     auto test_hier = KOKKOS_LAMBDA(TestPolicy::member_type team_member) {
         auto rand_gen = _r_p.get_state(); 
         int cell = team_member.league_rank();
         int t_r = team_member.team_rank();
-        //shared_double test(team_member.team_scratch(0)); 
-       
+        //shared_double test(team_member.team_scratch(0), team_member.team_size()); 
+        //Kokkos::View<double, Kokkos::MemoryUnmanaged> test_data(team_member.team_shmem());
+
         //Each team runs it's own shared simulation, so we could  have
         //the starting time set by only one thread and block until we are done
         //But, it doesn't really matter, so we'll give each local thread a copy
-        double delta_t = 0.0; 
-        
-        //equivalent to Kokkos::single
-        if(t_r == 0) {
-            //make sure no events are tracked yet
-            _events(cell) = 0;
-        }
-        team_member.team_barrier();
+        double delta_t, exp_sample, tau, cell_propensity; int events;
+        delta_t = 0.0; events = 0; 
 
         //All threads need to run this loop to meet the TeamThreadRange kernel
         while(delta_t < DELTA) {
-            //Each team needs only one exponential sample, so we use
-            //a single threads to set it and block all others from continuing
-            //until we are done
-            Kokkos::single(Kokkos::PerTeam(team_member), [&] () {
+            //reset tau
+            tau = 0.0;
+
+            //Each team needs only one exponential sample, so we use single to broadcast
+            //in practice single is actually implemented as something like:
+            //if(team.team_rank()==0) { lambda(value); } team.team_broadcast(value,0);
+            Kokkos::single(Kokkos::PerTeam(team_member), [&] (double &sample) {
                 double uniform_sample = rand_gen.drand(0.0, 1.0);
-                //uniform_sample = 0.5;
-                _exp_sample(cell) = -log(1-uniform_sample);
-                _tau(cell) = 0.0;
-            });
+                sample = -log(1-uniform_sample);
+            }, exp_sample);
             team_member.team_barrier();
+
             double counter = 0.0; //currently used to force the compiler not to optimize 
-            
-            //set the local tau and cache the exp sample
-            double tau = _tau(cell);
-            double exp_sample = _exp_sample(cell);
             
             //All threads need to run this loop to meet the TeamThreadRange kernel
             while(delta_t < DELTA && tau < exp_sample) {  
@@ -106,19 +105,20 @@ int main(int argc, char *argv[]) {
                 //STEP (4) : advance the loop timer, really, only one thread needs 
                 //           to do this
                 //BARRIER
-
-                //Combination of (3) and (4)
-                Kokkos::single(Kokkos::PerTeam(team_member), [&] () {
-                    double tau_samp = rand_gen.drand(0.001, 0.01);
-                    _tau(cell) += tau_samp;
-                    //printf("Tau %f\n", tau_samp);
-                    //_tau(cell) += 0.001;
-                });
+                
+                cell_propensity = 0.0;
+                Kokkos::parallel_reduce(
+                        Kokkos::TeamThreadRange(team_member, 64),
+                    [&] (const int pid, double& local_propensity) {
+                    local_propensity += rand_gen.drand(0.1, 0.2);
+                }, cell_propensity);
                 team_member.team_barrier();
-                tau = _tau(cell);
+                
+                //Combination of (3) and (4)
+                tau += cell_propensity*DELTA_DELTA_T;
                 delta_t += DELTA_DELTA_T;
                 
-                for(auto i = 0; i < 2500; i++) {
+                for(auto i = 0; i < 1; i++) {
                     double samp = rand_gen.drand(0.0, 1.0);
                     counter = i*delta_t*samp;
                 }
@@ -129,32 +129,52 @@ int main(int argc, char *argv[]) {
 
             //If we determined an event has occured, we need to block all other threads
             //and do some work(it's possible this may not be a fully single thread process)
-            Kokkos::single(Kokkos::PerTeam(team_member), [&] () {
-                if (_tau(cell) > _exp_sample(cell)) {
+            Kokkos::single(Kokkos::PerTeam(team_member), [&] (int &value) {
+                if (tau > exp_sample) {
                     //view are default alloc to zero
-                    _events(cell)++;
+                    value++;
                 }
-            });
+            }, events);
             team_member.team_barrier();     
         }
-        if(t_r == 0) {
-            int n_e = _events(cell);
-            //printf("%d events in cell %d\n", n_e, cell);
-        }
+        //if(t_r == 0) {
+            //printf("%d events in cell %d\n", events, cell);
+        //}
         rand_pool.free_state(rand_gen); 
     };
-    for(int i = 0; i <= 0; i++) {
-    for(int j = 0; j <= 4; j++) {
-        int num_cells = pow(2, j);
-        int num_threads = pow(2, i);
-        TestPolicy test_policy(num_cells, Kokkos::AUTO);//num_threads);//Kokkos::AUTO);
-        int team_size = test_policy.team_size();
+    
+    int num_runs = 15;
+    double run_times[num_runs+1];
+    double num_cells[num_runs+1];
+    for(int j = 0; j <= num_runs; j++) {
+        int cells = pow(2, j);
+        num_cells[j] = cells;
+        TestPolicy test_policy(cells, Kokkos::AUTO);
+        
         Kokkos::Timer timer;
         Kokkos::parallel_for("Test", test_policy, test_hier);
         Kokkos::fence();
         double time = timer.seconds();
-        printf("%d cells %d threads took %f seconds\n", num_cells, team_size, time);
-    }} 
- 
+        run_times[j] = time;
+        printf("%d cells took %f seconds\n", cells, time);
+    } 
+
+    std::cout << "run_times = np.asarray([";
+    for(int j = 0; j < num_runs+1; j++) {
+        if(j < num_runs) {
+            std::cout << run_times[j] << ", ";
+        } else {
+            std::cout << run_times[j] << "])\n";
+        }
+    }
+    std::cout << "num_cells = np.asarray([";
+    for(int j = 0; j < num_runs+1; j++) {
+        if(j < num_runs) {
+            std::cout << num_cells[j] << ", ";
+        } else {
+            std::cout << num_cells[j] << "])\n";
+        }
+    }
+
     return 0;
 }
