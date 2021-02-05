@@ -77,6 +77,11 @@ struct p_array1D {
         
     }
 
+    void linspace(double start, double end) {
+        using RangeSetPolicy = Kokkos::RangePolicy<typename DeviceType::execution_space>;
+        RangeSetPolicy range_set_policy(0, particles_d.size());
+    }
+
     void reslice() {
         positions_d = Cabana::slice<0>(particles_d);
         positions_h = Cabana::slice<0>(particles_h);
@@ -192,6 +197,7 @@ struct CellList {
         };
 
         Kokkos::parallel_for("Build permute list", particle_range_policy, create_permute);
+        Kokkos::fence();
 
         Kokkos::deep_copy(permute_h, permute_d);
         Kokkos::deep_copy(counts_h, counts_d);
@@ -220,7 +226,9 @@ struct LLCellList {
     view1D_h_t _counts_h;
     view1D_d_t _offsets_d;
     view1D_h_t _offsets_h;
-    
+    view1D_d_t _permute_d;
+    view1D_h_t _permute_h;
+
     view1D_d_t _counts_l_d;
     view1D_h_t _counts_l_h;
     view1D_d_t _offsets_l_d;
@@ -244,12 +252,14 @@ struct LLCellList {
         int n_p = positions.size(); 
 
 
-        view1D_d_t counts_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "counts"),ncell);
-        view1D_d_t offsets_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "offsets"),ncell);
+        view1D_d_t counts_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "counts_g_d"),ncell);
+        view1D_d_t offsets_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "offsets_g_d"),ncell);
+        view1D_d_t permute_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "permute_g_d"),n_p);
         
         view1D_h_t counts_h = Kokkos::create_mirror_view(counts_d);
         view1D_h_t offsets_h = Kokkos::create_mirror_view(offsets_d);
-       
+        view1D_h_t permute_h = Kokkos::create_mirror_view(permute_d);
+        
         view1D_d_t counts_l_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "counts"),ncell*ncell_l);
         view1D_d_t offsets_l_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "offsets"),ncell*ncell_l);
         view1D_d_t permute_l_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "permute"),n_p);
@@ -308,6 +318,20 @@ struct LLCellList {
 
         Kokkos::parallel_scan("Build cell list offset scan", cell_range_policy_local, offset_scan_local);
         Kokkos::fence();
+        
+        //Reset counts global
+        Kokkos::deep_copy(counts_d, 0);
+
+        //create the permute vector, i.e. our indirection cell list
+        auto create_permute = KOKKOS_LAMBDA(const size_t p) 
+        {
+            int cell_id = _grid.locatePointGlobal(positions(p));
+            int c = Kokkos::atomic_fetch_add( &counts_d(cell_id), 1 );
+            permute_d(offsets_d(cell_id)+c) = p;
+        };
+
+        Kokkos::parallel_for("Build permute list", particle_range_policy, create_permute);
+
 
         //Reset local counts
         Kokkos::deep_copy(counts_l_d, 0);
@@ -324,7 +348,8 @@ struct LLCellList {
         Kokkos::parallel_for("Build local permute list", particle_range_policy, create_permute_local);
 
         Kokkos::deep_copy(counts_h, counts_d);
-        Kokkos::deep_copy(offsets_h, offsets_d); 
+        Kokkos::deep_copy(offsets_h, offsets_d);
+        Kokkos::deep_copy(permute_h, permute_d);
         Kokkos::deep_copy(counts_l_h, counts_l_d);
         Kokkos::deep_copy(offsets_l_h, offsets_l_d);
         Kokkos::deep_copy(permute_l_h, permute_l_d);
@@ -333,6 +358,8 @@ struct LLCellList {
         _counts_h = counts_h;
         _offsets_d = offsets_d;
         _offsets_h = offsets_h;
+        _permute_d = permute_d;
+        _permute_h = permute_h;
         _counts_l_d = counts_l_d;
         _counts_l_h = counts_l_h;
         _offsets_l_d = offsets_l_d;
@@ -344,11 +371,96 @@ struct LLCellList {
     void show() {
         print(_counts_h, "\nGlobal Cell Counts");
         print(_offsets_h, "\nGlobal Cell Offsets");
+        print(_permute_h, "\nGloabal Permute");
         print(_counts_l_h, "\nLocal Counts");
         print(_offsets_l_h, "\nLocal Offsets");
         print(_permute_l_h, "\nLocal Permute");
     }
+
+    template <typename TeamType, typename SliceType> KOKKOS_INLINE_FUNCTION
+    void access_neighbors(TeamType& team, SliceType positions, int cell_g) const {
+        int local_cells = grid._nx_l;
+        int binSize = _counts_d(cell_g);
+        int binOffset = _offsets_d(cell_g);
+        int t_r = team.team_rank();
         
+        if(t_r == 0) {
+            printf("Nbr access for cell %d. Cell contains %d particles and has %d local cells\n", 
+                    cell_g, binSize, local_cells);
+        }
+
+        Kokkos::parallel_for(Kokkos::TeamThreadRange(team, 0, binSize), [&] (const int bi) {
+            //Question: Figure out how to locate local point from index
+            //Solution: Use a global permutation list
+            //TODO: consider doing parallel over global cells and parallel over local cells
+            int pid = _permute_d(binOffset + bi); //use global permute since we just need the pid
+
+            //here we could check if PID is in our range specified
+            //if(pid > begin && pid < end), but for now we assume it just is
+
+            //Cache particle coordinates
+            double x_p = positions(pid);
+            
+            //find which local bin it belongs to
+            int bi_l = grid.locatePointLocal(x_p);
+
+            //1D local Stecil, check left and right unless on boundary
+            //A scale space could make our stencil search deeper
+            int imin = (bi_l > 0) ? bi_l - 1 : bi_l;
+            int imax = (bi_l < local_cells - 1 ) ? bi_l + 1 : bi_l;
+
+            int local_stencil_count = 0;
+            //Loop over local cell stencil 
+            for(int i = imin; i <= imax; i++) {
+                //search particles in this bin and see if they are neighbors
+                int n_offset = _offsets_l_d(cell_g*local_cells+i);
+                int num_n  = _counts_l_d(cell_g*local_cells+i);
+                int local_cell_count = 0;
+                //we could use TeamVectorThreadRange, but serialize for now
+                for(int n = 0; n < num_n; n++) {
+                    
+                    //get neighbor true id
+                    int nid = _permute_l_d(n_offset+n);
+                    if(nid != pid) { //can't be your own neighbor :P
+                        //cache the candidate
+                        double x_n = positions(nid);
+
+                        //calculate the distance betwwen points
+                        //double dx = x_p - x_n;
+                        //double dist_sqr = dx*dx;
+                        //double rsqr = grid._cs*grid._cs;
+                        //printf("%f %f %f\n", x_p, dist_sqr, rsqr);
+                        //if(dist_sqr <= rsqr) 
+                        double dx = fabs(x_p - x_n);
+                        double nr = grid._cs;
+                        if(dx <= nr)
+                            local_cell_count += 1;    
+                    }
+                }
+                local_stencil_count += local_cell_count;
+            }
+             printf("Point %f in Local Cell %d has local stencil [%d, %d] and %d neighbors\n", 
+                     x_p, bi_l, imin, imax, local_stencil_count);
+        });
+    }
+
+    using NeighborAccessPolicy = 
+        Kokkos::TeamPolicy<typename DeviceType::execution_space, 
+        Kokkos::IndexType<int>, 
+        Kokkos::Schedule<Kokkos::Dynamic>>;
+
+
+    template<typename PolicyType> KOKKOS_INLINE_FUNCTION
+    double team_sum_test(typename PolicyType::member_type team_member) const {
+        double cell_propensity = 0.0;
+        Kokkos::parallel_reduce(
+                Kokkos::TeamThreadRange(team_member, 100),
+            [&] (const int pid, double& local_propensity) {
+            local_propensity += 0.01;
+        }, cell_propensity);
+        team_member.team_barrier();
+        return cell_propensity;
+    }
 };
 
 int main(int argc, char *argv[]) {
@@ -374,9 +486,16 @@ int main(int argc, char *argv[]) {
     LLCellList<DeviceType> cell_list_local(my_slice, 0.0, 9.0, 3.0, 1.0);
     cell_list_local.show();
     
+    //do a permuted print
+    std::cout << "\nBinned Points: [";
+    for(int i = 0; i < cell_list_local._permute_l_h.size(); i++) {
+        int idx = cell_list_local._permute_l_h(i);
+        double point = particles.positions_h(idx);
+        std::cout << " " << point << " ";
+    } std::cout << "]\n\n";
+
     //needed for correct cuda capture
     auto const& _cell_list_local = cell_list_local;
-
     using NeighborAccessPolicy = 
         Kokkos::TeamPolicy<ExecutionSpace, 
         Kokkos::IndexType<int>, 
@@ -386,6 +505,11 @@ int main(int argc, char *argv[]) {
     NeighborAccessPolicy access_policy(ncells_g, Kokkos::AUTO);//, 4);
     auto neighbor_access = KOKKOS_LAMBDA(NeighborAccessPolicy::member_type team) {
         int cell_g  = team.league_rank();
+        //double total = _cell_list_local.team_sum_test<NeighborAccessPolicy>(team);
+        //Kokkos::single(Kokkos::PerTeam(team), [&] () {
+            //printf("Total %f in cell %d\n", total, cell_g);
+        _cell_list_local.access_neighbors(team, particles.positions_d, cell_g);
+        //});
     };
     
     Kokkos::Timer timer;
