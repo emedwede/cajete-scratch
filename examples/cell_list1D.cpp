@@ -121,13 +121,23 @@ struct CellList {
     using view1D_h_t = typename view1D_d_t::HostMirror;
     
     grid1D grid;
-
+    
+    float _r_fact;
     template<class SliceType> 
     CellList (SliceType positions, 
               float min, float max, 
-              float dx, float rr) 
+              float dx, float rr, float r_fact = 1.0) //defaults to no reserve 
               : grid(max, min, dx, rr)
-    { build(positions); }
+    { 
+        if(r_fact < 1.0) {
+            printf("Reserve factor of %f is too small. Defaulting to 1.0 minimum.\n", r_fact);
+            _r_fact = 1.0;
+        } else {
+            _r_fact = r_fact;
+        }
+
+        build(positions); 
+    }
 
     template<class SliceType>
     void build(SliceType positions) {
@@ -139,12 +149,11 @@ struct CellList {
 
         view1D_d_t counts_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "counts"),ncell);
         view1D_d_t offsets_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "offsets"),ncell);
-        view1D_d_t permute_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "permute"),n_p);
         
         view1D_h_t counts_h = Kokkos::create_mirror_view(counts_d);
         view1D_h_t offsets_h = Kokkos::create_mirror_view(offsets_d);
-        view1D_h_t permute_h = Kokkos::create_mirror_view(permute_d);
         
+       
         Kokkos::RangePolicy<execution_space> particle_range_policy(0, n_p);
         
         /*auto counts_sv = Kokkos::Experimental::create_scatter_view( counts );
@@ -171,6 +180,8 @@ struct CellList {
         Kokkos::parallel_for("Build cell list cell count", particle_range_policy, cell_count_atomic);
         Kokkos::fence();
         
+        //capute for CUDA to avoid illegal memory access error
+        const auto& r_fact = _r_fact;
         //compute offsets
         Kokkos::RangePolicy<execution_space> cell_range_policy(0, ncell);
         auto offset_scan = KOKKOS_LAMBDA(const size_t c, 
@@ -179,15 +190,25 @@ struct CellList {
         {
             if(final_pass)
                 offsets_d(c) = update;
-            update += counts_d(c);
+            update += ceil(r_fact*counts_d(c));
         };
-
+        
         Kokkos::parallel_scan("Build cell list offset scan", cell_range_policy, offset_scan);
         Kokkos::fence();
 
+        //Count the amount of space reserved per cell
+        int n_p_gapped = 0;
+        Kokkos::parallel_reduce("Reduction", cell_range_policy, KOKKOS_LAMBDA (const int c, int& update) {
+            update += ceil(r_fact*counts_d(c)); 
+        }, n_p_gapped);
+        Kokkos::fence();
         //Reset counts
         Kokkos::deep_copy(counts_d, 0);
-
+        
+        view1D_d_t permute_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "permute"),n_p_gapped);
+        Kokkos::deep_copy(permute_d, -1);
+        view1D_h_t permute_h = Kokkos::create_mirror_view(permute_d);
+        
         //create the permute vector, i.e. our indirection cell list
         auto create_permute = KOKKOS_LAMBDA(const size_t p) 
         {
@@ -222,6 +243,8 @@ struct LLCellList {
     
     grid1D grid;
     
+    float _r_fact; 
+    
     view1D_d_t _counts_d;
     view1D_h_t _counts_h;
     view1D_d_t _offsets_d;
@@ -236,12 +259,22 @@ struct LLCellList {
     view1D_d_t _permute_l_d;
     view1D_h_t _permute_l_h;
 
+    //rr     := reaction radius
+    //r_fact := reserve factor
     template<class SliceType> 
     LLCellList (SliceType positions, 
               float min, float max, 
-              float dx, float rr) 
+              float dx, float rr, float r_fact = 1.0) //defaults to no reserve 
               : grid(max, min, dx, rr)
-    { build(positions); }
+    { 
+        if(r_fact < 1.0) {
+            printf("Reserve factor of %f is too small. Defaulting to 1.0 minimum.\n", r_fact);
+            _r_fact = 1.0;
+        } else {
+            _r_fact = r_fact;
+        }
+
+        build(positions); }
 
     template<class SliceType>
     void build(SliceType positions) {
@@ -250,7 +283,7 @@ struct LLCellList {
         int ncell = _grid._nx_g; 
         int ncell_l = _grid._nx_l; //Number of local cells
         int n_p = positions.size(); 
-
+        //int max_p = floor(_r_fact*np);
 
         view1D_d_t counts_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "counts_g_d"),ncell);
         view1D_d_t offsets_d(Kokkos::view_alloc(Kokkos::WithoutInitializing, "offsets_g_d"),ncell);
@@ -481,7 +514,7 @@ int main(int argc, char *argv[]) {
     print(particles.positions_h);
 
 
-    auto my_slice = Cabana::slice<0>(particles.particles_d); 
+    auto my_slice = Cabana::slice<0>(particles.particles_d);
     CellList<DeviceType> cell_list_global(my_slice, 0.0, 9.0, 3.0, 1.0);
     LLCellList<DeviceType> cell_list_local(my_slice, 0.0, 9.0, 3.0, 1.0);
     cell_list_local.show();
