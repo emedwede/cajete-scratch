@@ -119,7 +119,15 @@ struct CellList {
 
     using view1D_d_t = Kokkos::View<int*, memory_space>; 
     using view1D_h_t = typename view1D_d_t::HostMirror;
-    
+   
+    view1D_d_t _counts_d;
+    view1D_d_t _offsets_d;
+    view1D_d_t _permute_d;
+
+    view1D_h_t _counts_h;
+    view1D_h_t _offsets_h;
+    view1D_h_t _permute_h;    
+
     grid1D grid;
     
     float _r_fact;
@@ -220,13 +228,52 @@ struct CellList {
         Kokkos::parallel_for("Build permute list", particle_range_policy, create_permute);
         Kokkos::fence();
 
-        Kokkos::deep_copy(permute_h, permute_d);
-        Kokkos::deep_copy(counts_h, counts_d);
-        Kokkos::deep_copy(offsets_h, offsets_d); 
+        _counts_d = counts_d;
+        _counts_h = counts_h;
+        _offsets_d = offsets_d;
+        _offsets_h = offsets_h;
+        _permute_d = permute_d;
+        _permute_h = permute_h;
+    }
+    
+    void show() {
+        Kokkos::deep_copy(_permute_h, _permute_d);
+        Kokkos::deep_copy(_counts_h, _counts_d);
+        Kokkos::deep_copy(_offsets_h, _offsets_d); 
         
-        print(counts_h, "\nCounts");
-        print(offsets_h, "\nOffsets");
-        print(permute_h, "\nPermute");
+        print(_counts_h, "\nCounts");
+        print(_offsets_h, "\nOffsets");
+        print(_permute_h, "\nPermute");
+    }
+    //function returns true if successful insertion
+    //TODO: we need a device and host version
+    KOKKOS_INLINE_FUNCTION
+    bool insert(double x_p, int id) const { 
+        //currently we just assume provided point is in the grid boundary
+        //in order to reduce error checking
+        int cell = grid.locatePointGlobal(x_p);
+        
+        int count = _counts_d(cell);
+        
+        int offset_low  = _offsets_d(cell);
+        int offset_high = (cell < grid._nx_g) ? _offsets_d(cell+1) : _permute_d.size();
+        
+        int partition_size = offset_high - offset_low; 
+
+        //There is room to add it
+        if(count < partition_size) {
+            _permute_d(offset_low+count) = id;
+            _counts_d(cell) += 1;
+            return true;
+        } else { //We're out of memory
+            return false;
+        }
+    }
+
+    //function to remove item from cell list
+    KOKKOS_INLINE_FUNCTION
+    void remove(int idx) const {
+
     }
         
 };
@@ -515,7 +562,14 @@ int main(int argc, char *argv[]) {
 
 
     auto my_slice = Cabana::slice<0>(particles.particles_d);
-    CellList<DeviceType> cell_list_global(my_slice, 0.0, 9.0, 3.0, 1.0);
+    CellList<DeviceType> cell_list_global(my_slice, 0.0, 9.0, 3.0, 1.0, 1.5);
+    cell_list_global.show(); 
+    if(cell_list_global.insert(1.67, 666)) {
+        printf("Succesful insertion\n");
+        cell_list_global.show();
+    } else {
+        printf("Failed insertion\n");
+    }
     LLCellList<DeviceType> cell_list_local(my_slice, 0.0, 9.0, 3.0, 1.0);
     cell_list_local.show();
     
