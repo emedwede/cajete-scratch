@@ -67,14 +67,26 @@ struct p_array1D {
 
     positions_t_d positions_d;
     positions_t_h positions_h;
+    
+    int _size_r; //reserved size
+    int _size_c; //current size
+    
+    float _r_f; //reserve factor
 
-    p_array1D(int n_p) 
+    //TODO: make this construction less greedy and more crafty
+    p_array1D(int n_p, float r_f=1.0) 
         : particles_d("Particles on Device", n_p)
         , particles_h("Particles on Host", n_p)
         , positions_d(Cabana::slice<0>(particles_d))
         , positions_h(Cabana::slice<0>(particles_h))
     {
-        
+        _size_c = n_p;
+        _size_r = ceil(n_p*r_f);
+        _r_f = r_f;
+        particles_d.reserve(_size_r);
+        particles_h.reserve(_size_r);
+        reslice();
+
     }
 
     void linspace(double start, double end) {
@@ -95,6 +107,16 @@ struct p_array1D {
     void copy_device_to_host() {
         Cabana::deep_copy(positions_h, positions_d);
         reslice();
+    }
+
+    //host push
+    void push(double x_p) { //push the particle to the end
+        _size_c += 1;
+        particles_d.resize(_size_c);
+        particles_h.resize(_size_c);
+        reslice();
+        positions_h(_size_c-1) = x_p;
+        copy_host_to_device();
     }
 
 };
@@ -563,8 +585,10 @@ int main(int argc, char *argv[]) {
 
     auto my_slice = Cabana::slice<0>(particles.particles_d);
     CellList<DeviceType> cell_list_global(my_slice, 0.0, 9.0, 3.0, 1.0, 1.5);
-    cell_list_global.show(); 
-    if(cell_list_global.insert(1.67, 666)) {
+    cell_list_global.show();
+    particles.push(1.67);
+    print(particles.positions_h);
+    if(cell_list_global.insert(1.67, particles._size_c-1)) {
         printf("Succesful insertion\n");
         cell_list_global.show();
     } else {
