@@ -27,6 +27,9 @@
 #ignore all json files
 *.json
 
+#ignore all png files
+*.png
+
 #ignore ccls stuff
 *.ccls*
 
