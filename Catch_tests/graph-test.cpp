@@ -16,12 +16,13 @@ TEST_CASE( "Graph Initialization Test", "[graph_test]" )
 
     REQUIRE( size == system.graph_d.size() );
     REQUIRE( size <= system.capacity() );
-    REQUIRE( size == system.current_size() );
+    REQUIRE( size == system.get_size() );
     size_t num_pushes = 5000;
+    
     Kokkos::parallel_for(num_pushes, KOKKOS_LAMBDA(const int i) {
         system.atomic_push();
     });
 
-    REQUIRE( ( size + num_pushes ) == system.current_size() );
+    REQUIRE( ( size + num_pushes ) == system.get_size() );
 }
 

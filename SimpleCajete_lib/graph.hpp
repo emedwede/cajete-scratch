@@ -28,7 +28,8 @@ struct Graph {
     using node_type_t_h = typename graph_t_h::template member_slice_type<1>;
     using edge_type_t_h = typename graph_t_h::template member_slice_type<2>;
   
-    using count_t_d = Kokkos::View<size_t>;
+    using count_t_d = Kokkos::View<size_t, typename DeviceType::execution_space>;
+    using count_t_h = typename count_t_d::HostMirror;
 
     graph_t_d graph_d;
     graph_t_h graph_h;
@@ -43,8 +44,10 @@ struct Graph {
     edge_type_t_h edges_h;
     
     //current this defaults to default space
-    count_t_d current_size;
+    count_t_d current_size_d;
+    count_t_h current_size_h;
 
+    //TODO: Add a reserve factor to help test pushes to a limit
     Graph(size_t n)
         : graph_d("Graph on the Device", n)
         , graph_h("Graph on the Host", n)
@@ -54,9 +57,12 @@ struct Graph {
         , nodes_h(Cabana::slice<1>(graph_h))
         , edges_d(Cabana::slice<2>(graph_d))
         , edges_h(Cabana::slice<2>(graph_h))
-        , current_size("Graph Size")
+        , current_size_d("Graph Size Device")
+        , current_size_h("Graph Size Host")
     {
-        current_size() = n;
+        //deep copy allows us to set the value on the device easily
+        Kokkos::deep_copy(current_size_d, n);
+        Kokkos::deep_copy(current_size_h, n); //Excessive for the host
     }
 
     void reslice () {
@@ -80,7 +86,13 @@ struct Graph {
         reslice();
     }
 
+    size_t get_size() {
+        Kokkos::deep_copy(current_size_h, current_size_d);
+        return current_size_h();
+    }
+
     size_t capacity() {
+        
         return graph_d.capacity();
     }
     
@@ -89,7 +101,7 @@ struct Graph {
     //Pushes a point to the end of our graph atomically
     KOKKOS_INLINE_FUNCTION
     void atomic_push() const { //Not a bad choice if we have infrequent parallel pushes
-        size_t id = Kokkos::atomic_fetch_add(&current_size(), 1); 
+        size_t id = Kokkos::atomic_fetch_add(&current_size_d(), 1); 
     }
 
     //graph needs removals
