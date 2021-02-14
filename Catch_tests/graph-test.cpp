@@ -1,6 +1,7 @@
 #include "catch.hpp"
 #include "graph.hpp"
 #include "mt_inits.hpp"
+#include "visualization.hpp"
 
 using MemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
 using ExecutionSpace = Kokkos::DefaultExecutionSpace;
@@ -45,9 +46,13 @@ TEST_CASE( "Graph Initialization Test", "[graph_test]" )
 
     REQUIRE( ( size + num_pushes ) == system.get_size() );
     
-    //system = Cajete::Graph<DeviceType>(5);
+    system = Cajete::Graph<DeviceType>(5);
     //system.show();
-    //mt3_uniform_init(system, 3);
+    mt3_uniform_init(system, 6);
     //system.show();
+    Visualizer<DeviceType> writer;
+    writer.write_vis(system, "test_vis_step_1");
+    writer.write_vis(system, "test_vis_step_2");
+
 }
 
