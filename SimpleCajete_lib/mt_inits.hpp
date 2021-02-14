@@ -69,19 +69,21 @@ void mt3_uniform_init(GraphType& system, size_t nmt) {
         system.positions_d(k, 1) = y1;
         system.nodes_d(k) = 0;
         system.edges_d(k, 0) = k+1;
-        
+        system.id_d(k) = k;
+
         //set the intermediate
         system.positions_d(k+1, 0) = c_x;
         system.positions_d(k+1, 1) = c_y;
         system.nodes_d(k+1) = 1;
         system.edges_d(k+1, 0) = k;
         system.edges_d(k+1, 1) = k+2;
-        
+        system.id_d(k+1) = k+1;
+
         system.positions_d(k+2, 0) = x3;
         system.positions_d(k+2, 1) = y3;
         system.nodes_d(k+2) = 2;
         system.edges_d(k+2, 0) = k+1;
-        
+        system.id_d(k+2) = k+2;
         //at end of the kernel
         _r_p.free_state(rand_gen);
     });

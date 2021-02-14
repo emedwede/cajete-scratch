@@ -3,6 +3,7 @@
 
 #include <Cabana_Core.hpp>
 #include <Kokkos_Core.hpp>
+#include "utils.hpp"
 
 namespace Cajete {
 
@@ -11,7 +12,8 @@ using NodeDataTypes =
     Cabana::MemberTypes<
         double[2], //position
         int, //type
-        long int[4] //maximal number of edges
+        long int[4], //maximal number of edges
+        long int //a unique id
     >;
     
 //Graphs are composed of nodes and edges
@@ -22,12 +24,14 @@ struct Graph {
     using positions_t_d = typename graph_t_d::template member_slice_type<0>;
     using node_type_t_d = typename graph_t_d::template member_slice_type<1>;
     using edge_type_t_d = typename graph_t_d::template member_slice_type<2>;
-    
+    using id_type_t_d = typename graph_t_d::template member_slice_type<3>;
+
     using graph_t_h = typename graph_t_d::host_mirror_type;
     using positions_t_h = typename graph_t_h::template member_slice_type<0>;
     using node_type_t_h = typename graph_t_h::template member_slice_type<1>;
     using edge_type_t_h = typename graph_t_h::template member_slice_type<2>;
-  
+    using id_type_t_h = typename graph_t_h::template member_slice_type<3>;
+
     using count_t_d = Kokkos::View<size_t, typename DeviceType::execution_space>;
     using count_t_h = typename count_t_d::HostMirror;
 
@@ -43,6 +47,9 @@ struct Graph {
     edge_type_t_d edges_d;
     edge_type_t_h edges_h;
     
+    id_type_t_d id_d;
+    id_type_t_h id_h;
+
     //current this defaults to default space
     count_t_d current_size_d;
     count_t_h current_size_h;
@@ -62,6 +69,8 @@ struct Graph {
         , nodes_h(Cabana::slice<1>(graph_h))
         , edges_d(Cabana::slice<2>(graph_d))
         , edges_h(Cabana::slice<2>(graph_h))
+        , id_d(Cabana::slice<3>(graph_d))
+        , id_h(Cabana::slice<3>(graph_h))
         , current_size_d("Graph Size Device")
         , current_size_h("Graph Size Host")
         , reserve_size_d("Max Graph Size Device")
@@ -89,6 +98,10 @@ struct Graph {
 
         edges_d = Cabana::slice<2>(graph_d);
         edges_h = Cabana::slice<2>(graph_h);
+
+        id_d = Cabana::slice<3>(graph_d);
+        id_h = Cabana::slice<3>(graph_h);
+
     }
     
     //sets to default values on a range
@@ -131,7 +144,7 @@ struct Graph {
     }
 
     //resizes our graph
-    void resize_HostSafe(size_t n) {
+    void resize_HostSafe(long int n) {
         if(n > reserve_size_h()) {
             auto low = current_size_h();
             //reserves a little more memory
@@ -192,10 +205,59 @@ struct Graph {
             std::cout << "Edge Link: [";
             for(auto j = 0; j < 4; j++) {
                 std::cout << " " << edges_h(i, j) << " ";
-            } std::cout << "]\n\n";
+            } std::cout << "]\n";
+            std::cout << "Id: [ " << id_h(i) << " ]\n\n";
         }
     }
 
+    struct ShuffleTag {};
+    using ShufflePolicy = Kokkos::RangePolicy<
+        typename DeviceType::execution_space, ShuffleTag>;
+
+    void shuffle() {
+        int permute_size = get_size();
+        Kokkos::View<int*> permute_d("Permute_D", permute_size);
+        Kokkos::View<int*>::HostMirror permute_h("Permute_H", permute_size);
+        permute_fill(permute_d);
+        Kokkos::deep_copy(permute_h, permute_d);
+        fisher_yates(permute_h);
+        Kokkos::deep_copy(permute_d, permute_h);
+       
+        graph_t_d temp_graph_d("Temp", reserve_size_h());
+        positions_t_d temp_positions_d = Cabana::slice<0>(temp_graph_d);
+        node_type_t_d temp_nodes_d =  Cabana::slice<1>(temp_graph_d);
+        edge_type_t_d temp_edges_d =  Cabana::slice<2>(temp_graph_d);
+        id_type_t_d temp_id_d = Cabana::slice<3>(temp_graph_d);
+
+        const auto& _positions_d = positions_d;
+        const auto& _nodes_d = nodes_d;
+        const auto& _edges_d = edges_d;
+        const auto& _id_d = id_d; 
+        ShufflePolicy shuffle_policy(0, get_size());
+        //Kokkos::parallel_for("Graph Shuffle", shuffle_policy, *this);
+        Kokkos::parallel_for("Graph Shuffle", get_size(),
+                KOKKOS_LAMBDA(const int i) {
+                int n = permute_d(i);
+                temp_id_d(n) = _id_d(i);
+                temp_positions_d(n, 0) = _positions_d(i, 0);
+                temp_positions_d(n, 1) = _positions_d(i, 1);
+                temp_nodes_d(n) = _nodes_d(i);
+                for(auto j = 0; j < 4; j++) {
+                    int con = _edges_d(i, j);
+                    if(con != -1)
+                        temp_edges_d(n, j) = permute_d(con);
+                    else
+                        temp_edges_d(n, j) = -1;
+                }
+        });
+        Cabana::deep_copy(graph_d, temp_graph_d);
+        copy_device_to_host();
+    }
+
+    KOKKOS_INLINE_FUNCTION
+    void operator()(const ShuffleTag&, const int i) const {
+        printf("Shuffle from %d\n", i);
+    }
     //graph needs removals
     
     //graph needs customizable rewrites
