@@ -270,6 +270,27 @@ struct Graph {
     //graph needs to be sortable and shufflable
 };
 
+template<typename GraphType>
+void graph_copy(GraphType& dest, GraphType& src) {
+    Kokkos::deep_copy(dest.current_size_d, src.current_size_d);
+    Kokkos::deep_copy(dest.current_size_h, src.current_size_h);
+    Kokkos::deep_copy(dest.reserve_size_d, src.reserve_size_d);
+    Kokkos::deep_copy(dest.reserve_size_h, src.reserve_size_h);
+    
+    dest._r_f = src._r_f;
+
+    //Go down to cabana level to make sure our sizes are consistent
+    dest.graph_d.reserve(src.graph_d.capacity());
+    dest.graph_d.resize(src.reserve_size_h());
+    
+    dest.graph_h.reserve(src.graph_h.capacity());
+    dest.graph_h.resize(src.reserve_size_h());
+
+    Cabana::deep_copy(dest.graph_d, src.graph_d);
+    Cabana::deep_copy(dest.graph_h, src.graph_h);
+    dest.reslice();
+}
+
 /***************************************************
  *Extra Notes:
  *

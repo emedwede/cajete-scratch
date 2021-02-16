@@ -55,7 +55,7 @@ TEST_CASE("Graph Shuffle Test", "[graph_test]") {
     
     Cajete::Graph<DeviceType> system(5);
     mt3_uniform_init(system, 35);
-   
+    
     //We use pair since (2, 1) != (1, 2) i.e. unique
     using PairType = std::pair<long int, long int>;
     std::set<PairType> setA;
@@ -89,8 +89,33 @@ TEST_CASE("Graph Shuffle Test", "[graph_test]") {
             }
         }
     }
-
+    
     bool set_match = (setA == setB);
     REQUIRE( set_match == true );
+}
+
+TEST_CASE("Graph Copy Test", "[graph_test]") {
+    //Make graph of size 11 nodes
+    Cajete::Graph<DeviceType> graph_current(11);
+    
+    //init a graph with 3 Microtubules
+    mt3_uniform_init(graph_current, 3);
+    
+    //Make an empty graph, since copy will resize it
+    Cajete::Graph<DeviceType> graph_old(0);
+    
+    //Copy current graph to old graph
+    Cajete::graph_copy(graph_old, graph_current);
+
+    //First check that the copy worked by picking an arbitrary position
+    REQUIRE( graph_old.positions_h(2, 0) == graph_current.positions_h(2, 0) );
+    
+    //shuffle current graph
+    graph_current.shuffle();
+
+    //Check that they are in fact deep copies, since a shuffle would effect 
+    //a shallow copy
+    REQUIRE( graph_old.positions_h(2, 0) != graph_current.positions_h(2, 0) );
+
 }
 
