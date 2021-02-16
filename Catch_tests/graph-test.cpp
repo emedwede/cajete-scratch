@@ -2,6 +2,8 @@
 #include "graph.hpp"
 #include "mt_inits.hpp"
 #include "visualization.hpp"
+#include <set>
+#include <utility>
 
 using MemorySpace = Kokkos::DefaultExecutionSpace::memory_space;
 using ExecutionSpace = Kokkos::DefaultExecutionSpace;
@@ -45,40 +47,50 @@ TEST_CASE( "Graph Initialization Test", "[graph_test]" )
     });
 
     REQUIRE( ( size + num_pushes ) == system.get_size() );
-    //Do a crude shuffle test
-    system = Cajete::Graph<DeviceType>(5);
-    mt3_uniform_init(system, 350);
-    typename Cajete::Graph<DeviceType>::graph_t_h 
-        temp_graph_h("Temp", system.reserve_size_h());
-    Cabana::deep_copy(temp_graph_h, system.graph_h);
-    auto temp_edges_h = Cabana::slice<2>(temp_graph_h);
-    auto temp_id_h = Cabana::slice<3>(temp_graph_h);
+}
 
+//We do the shuffle test by checking for referential integrity
+//after the shuffle
+TEST_CASE("Graph Shuffle Test", "[graph_test]") {
+    
+    Cajete::Graph<DeviceType> system(5);
+    mt3_uniform_init(system, 35);
+   
+    //We use pair since (2, 1) != (1, 2) i.e. unique
+    using PairType = std::pair<long int, long int>;
+    std::set<PairType> setA;
+    std::set<PairType> setB;
+
+    for(auto i = 0; i < system.get_size(); i++) {
+        auto src_id = system.id_h(i);
+        for(int j = 0; j < 4; j++) {
+            auto con = system.edges_h(i, j);
+            if(con != -1) {
+                auto dest_id = system.id_h(con);
+                setA.insert(std::make_pair(src_id, dest_id));
+            }
+        }
+    }
+   
     Visualizer<DeviceType> writer;
     writer.write_vis(system, "test_vis_step_1");
-    //shuffle plenty of times to ensure we have no errors
-    for(auto i = 0; i < 100; i++)
+    //shuffle several times to ensure we have no errors
+    for(auto i = 0; i < 10; i++)
         system.shuffle();
     writer.write_vis(system, "test_vis_step_2");
 
-    //TODO: Find a better way to write this
     for(auto i = 0; i < system.get_size(); i++) {
-        int a = system.id_h(i);
-        for(auto j = 0; j < 4; j++) {
-            int con = system.edges_h(i, j);
-            int b = -1;
+        auto src_id = system.id_h(i);
+        for(int j = 0; j < 4; j++) {
+            auto con = system.edges_h(i, j);
             if(con != -1) {
-                b = system.id_h(con);
-                bool found = false;
-                int a_t = temp_id_h(a);
-                for(auto k = 0; k < 4; k++) {
-                    if(temp_id_h(temp_edges_h(a, k)) == b)
-                        found = true;
-                }
-                REQUIRE(found == true);
+                auto dest_id = system.id_h(con);
+                setB.insert(std::make_pair(src_id, dest_id));
             }
-
         }
     }
+
+    bool set_match = (setA == setB);
+    REQUIRE( set_match == true );
 }
 
