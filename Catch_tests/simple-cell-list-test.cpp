@@ -10,6 +10,8 @@ TEST_CASE("List of Linked Cell List Test" "[cell_list_test]")
     using ExecutionSpace = Kokkos::DefaultExecutionSpace;
     using DeviceType = Kokkos::Device<ExecutionSpace, MemorySpace>;
     
+    Cajete::StrataData<DeviceType> stratum();
+
     Cajete::ParticleArray<DeviceType> p_array(10);
     std::cout << "Size: " << p_array.size() << std::endl;
     p_array.print();
