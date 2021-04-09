@@ -8,7 +8,9 @@
 add_executable(cell_list1D cell_list1D.cpp)
 add_executable(hier_ssa hier_ssa.cpp)
 add_executable(performance_tests performance_tests.cpp)
+add_executable(parallel_vector parallel_vector.cpp)
 
 target_link_libraries(cell_list1D Cabana::cabanacore)
 target_link_libraries(hier_ssa Cabana::cabanacore)
 target_link_libraries(performance_tests Cabana::cabanacore)
+target_link_libraries(parallel_vector Cabana::cabanacore)
