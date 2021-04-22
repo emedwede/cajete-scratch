@@ -11,6 +11,7 @@ add_executable(performance_tests performance_tests.cpp)
 add_executable(parallel_vector parallel_vector.cpp)
 add_executable(pooled_allocate pooled_allocate.cpp)
 add_executable(graph_types graph_types.cpp)
+add_executable(aosoa_stuff aosoa_stuff.cpp)
 
 target_link_libraries(cell_list1D Cabana::cabanacore)
 target_link_libraries(hier_ssa Cabana::cabanacore)
@@ -18,3 +19,5 @@ target_link_libraries(performance_tests Cabana::cabanacore)
 target_link_libraries(parallel_vector Cabana::cabanacore)
 target_link_libraries(pooled_allocate Cabana::cabanacore)
 target_link_libraries(graph_types Cabana::cabanacore)
+target_link_libraries(aosoa_stuff Cabana::cabanacore)
+
