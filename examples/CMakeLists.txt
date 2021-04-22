@@ -12,6 +12,7 @@ add_executable(parallel_vector parallel_vector.cpp)
 add_executable(pooled_allocate pooled_allocate.cpp)
 add_executable(graph_types graph_types.cpp)
 add_executable(aosoa_stuff aosoa_stuff.cpp)
+add_executable(slice_pack slice_pack.cpp)
 
 target_link_libraries(cell_list1D Cabana::cabanacore)
 target_link_libraries(hier_ssa Cabana::cabanacore)
@@ -20,4 +21,5 @@ target_link_libraries(parallel_vector Cabana::cabanacore)
 target_link_libraries(pooled_allocate Cabana::cabanacore)
 target_link_libraries(graph_types Cabana::cabanacore)
 target_link_libraries(aosoa_stuff Cabana::cabanacore)
+target_link_libraries(slice_pack Cabana::cabanacore)
 

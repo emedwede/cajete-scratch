@@ -132,11 +132,47 @@ int main(int argc, char * argv[]) {
         std::cout << mark_slice(i) << " ";
     } std::cout << std::endl;
 
+    auto type_slice = Cabana::slice<1>(nodes);
+    auto ptr_slice =  Cabana::slice<2>(nodes);
+    auto num_edge_slice = Cabana::slice<3>(nodes);
+    
+    auto num_insertions = num_node_tuple - 10;
     //without a range policy it defaults execution the defualt memory space from compilation
-    Kokkos::parallel_for("Pool Based Node Insertion", num_node_pools, KOKKOS_LAMBDA(const int i) {
-        //here is where we need to implement some sort of atomic insertions
-        //auto pool_number
+    Kokkos::parallel_for("Pool Based Node Insertion", num_insertions, KOKKOS_LAMBDA(const int i) {
+        
+        int p = i % num_node_pools; //Our insertion pools is evenly spread accross the threads
+        int n = 1; //number of nodes we ask for allocation for
+        
+        //We need to atomically ask the pool for some space, in this case 1 node
+        auto c = Kokkos::atomic_fetch_add(&node_pool_sizes(p), n);
+
+        //Check to see if we are out of pool capacity
+        if(c >= node_pool_capacity(p)) {
+            printf("OOM er in pool %d, allocation on thread %d failed!\n", p, i);
+        } else {
+            auto j = node_pool_offsets(p) + c; //Global index for insertion
+
+            //Insert the node and mark it as not empty, set the type
+            mark_slice(j) = true;
+            type_slice(j) = p; //for now just setting the type to the pool it's in
+            ptr_slice(j) = 0;
+            num_edge_slice(j) = 0;
+
+            //if we wanted to add edges here, we'd also need to atomically ask for them
+            //from an edge pool!
+        }
+
     });
+    Kokkos::fence();
+
+    //now to check for correctness, lest loop through and count all the marked bits
+    auto mark_count = 0;
+    for(auto i = 0; i < mark_slice.size(); i++) {
+        if(mark_slice(i))
+            mark_count++;
+    }
+    std::cout << "Asked for " << num_insertions << " insertions, and found " 
+        << mark_count << " marks!\n";
 
     return 0;
 
