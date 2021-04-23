@@ -17,13 +17,13 @@ using DeviceType = Kokkos::Device<ExecutionSpace, MemorySpace>;
 template <class MemberTypes, class DeviceType>
 struct MyWrapper {
 	
-	using my_type_t = Cabana::AoSoA<MemberTypes, DeviceType>;
+	/*using my_type_t = Cabana::AoSoA<MemberTypes, DeviceType>;
     using sequence = decltype(std::make_integer_sequence<int, MemberTypes::size>{}); 
     
     template<int ... Ns>
     auto makeSlicePack(std::integer_sequence<int,Ns...>, my_type_t aosoa) {
         return Cabana::makeParameterPack( Cabana::slice<Ns>(aosoa)... );
-    }
+    }*/
 
     //using pack_type = decltype(makeSlicePack(sequence{}, my_type_t{}));
 
@@ -86,7 +86,7 @@ int main(int argv, char* argc[]) {
     Kokkos::ScopeGuard scope_guard(argv, argc);
     
     using MemberTypes = Cabana::MemberTypes<int, double[3]>;
-     using sequence = decltype(std::make_integer_sequence<int, MemberTypes::size>); 
+    using sequence = decltype(std::make_integer_sequence<int, MemberTypes::size>{}); 
        
     //MyWrapper<MemberTypes, DeviceType> item; //item(10);
 
