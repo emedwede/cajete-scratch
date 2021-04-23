@@ -14,20 +14,23 @@ using DeviceType = Kokkos::Device<ExecutionSpace, MemorySpace>;
 #endif
 
 
-template <class DeviceType>
+template <class MemberTypes, class DeviceType>
 struct MyWrapper {
-	using DataTypes = Cabana::MemberTypes<int, double[3]>;
+	
+	using my_type_t = Cabana::AoSoA<MemberTypes, DeviceType>;
+    using sequence = decltype(std::make_integer_sequence<int, MemberTypes::size>{}); 
+    
+    template<int ... Ns>
+    auto makeSlicePack(std::integer_sequence<int,Ns...>, my_type_t aosoa) {
+        return Cabana::makeParameterPack( Cabana::slice<Ns>(aosoa)... );
+    }
 
-	using my_type_t = Cabana::AoSoA<DataTypes, DeviceType>;
-	using slice_0_t = typename my_type_t::template member_slice_type<0>;
-	using slice_1_t = typename my_type_t::template member_slice_type<1>;
+    //using pack_type = decltype(makeSlicePack(sequence{}, my_type_t{}));
 
-	my_type_t data;
+	//my_type_t data;
+    //pack_type slice_pack;
 
-	slice_0_t slice0;
-	slice_1_t slice1;
-
-	MyWrapper(size_t num_tuple)
+	/*MyWrapper(size_t num_tuple)
 	  : data("MyData", num_tuple)
 	{
 		slice_all();
@@ -36,22 +39,19 @@ struct MyWrapper {
 	//slices inside the class allow us to do tagged functor super simple
 	KOKKOS_INLINE_FUNCTION
 	void operator()(const int i) const {
-		slice0(i) = 1;
+        //auto my_slice = Cabana::get<0>(slice_pack);
+        //my_slice(i) = 1;
 	}
 
 	void slice_all() {
-		slice0 = Cabana::slice<0>(data);
-		slice1 = Cabana::slice<1>(data);
-	}
+        //slice_pack = makeSlicePack(std::make_integer_sequence<int, MemberTypes::size>{}, my_type_t{});
+	}*/
     
-    //template<int ... Ns>
-    //auto makeSlicePack(std::integer_sequence<int,Ns...>, my_type_t) {
-    //    return Cabana::makeParameterPack( Cabana::slice<Ns>(my_type_t)... );
-    //}
+     
 };
-
+//using my_type_t = Cabana::AoSoA<Cabana::MemberTypes<int, int>, DeviceType>; 
 //template<int ... Ns>
-//auto makeSlicePack(std::integer_sequence<int,Ns...>, aosoa) {
+//auto makeSlicePack(std::integer_sequence<int,Ns...>, my_type_t aosoa) {
 //    return Cabana::makeParameterPack( Cabana::slice<Ns>(aosoa)... );
 //}
 
@@ -84,11 +84,31 @@ void print_sequence(std::integer_sequence<T, ints...> int_seq) {
 //using sequence = decltype(std::make_integer_sequence<int,MemberTypes::size>);
 int main(int argv, char* argc[]) {
     Kokkos::ScopeGuard scope_guard(argv, argc);
-    //Cabana::makeParameterPack();    
-    MyWrapper<DeviceType> item(10);
-    item.slice_all();
-    using sequence = std::integer_sequence<int,2>;
+    
+    using MemberTypes = Cabana::MemberTypes<int, double[3]>;
+     using sequence = decltype(std::make_integer_sequence<int, MemberTypes::size>); 
+       
+    //MyWrapper<MemberTypes, DeviceType> item; //item(10);
 
+   /* my_type_t aosoa("aosoa", 10);
+    auto my_pack = Cabana::makeParameterPack(Cabana::slice<0>(aosoa), Cabana::slice<1>(aosoa));
+    auto slice0 = Cabana::get<0>(my_pack);
+    for(auto i = 0; i < 10; i++) {
+        slice0(i) = i;
+    }
+    using pack_type = decltype(makeSlicePack(std::make_integer_sequence<int, 2>{}, my_type_t{}));
+    pack_type test_pack = my_pack;
+    auto slice_test = Cabana::get<0>(my_pack);
+    std::cout << "Slice Data: ";
+    for(auto i = 0; i < 10; i++) {
+        std::cout << slice_test(i) << " ";
+    } std::cout << std::endl;*/
+    //Cabana::makeParameterPack();    
+    //MyWrapper<DeviceType> item(10);
+    //item.slice_all();
+    //using sequence = std::integer_sequence<int,2>;
+    //auto my_pack = Cabana::makeParameterPack<int, int, double>(1, 2, 2.3);
+    //std::cout << my_pack<0>::value_type << std::endl;
    // using pack_type = decltype(makeSlicePack(sequence{},my_type_t{}));
     return 0;
 }
