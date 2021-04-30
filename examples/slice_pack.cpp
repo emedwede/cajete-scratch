@@ -72,8 +72,8 @@ int main(int argv, char* argc[]) {
     using sequence = decltype(std::make_integer_sequence<int, MemberTypes::size>{}); 
        
     MyWrapper<MemberTypes, DeviceType> item("MyItem", 10);
-    
-    Cabana::get<0>(item.slice_pack)(0) = 1;
+   
+    auto slice0 = Cabana::get<0>(item.slice_pack);
     
     return 0;
 }

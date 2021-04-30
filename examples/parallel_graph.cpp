@@ -173,7 +173,7 @@ struct Graph {
         std::cout << "Nodes [Size, Capacity, NumSoA]: " << edges.size() 
             << " " << edges.capacity() << " " << edges.numSoA() << "\n";
     
-        /*
+        
         //print the node pool capacities
         print1D(node_pool_capacity, "Node Pool Capacities");
 
@@ -191,7 +191,7 @@ struct Graph {
     
         //print the edge pool sizes
         print1D(edge_pool_sizes, "Edge Pool Sizes");
-        */
+        
         for(auto i = 0; i < 80; i++)
             std::cout << "-";
         std::cout << std::endl;
@@ -208,16 +208,35 @@ struct Graph {
 
 };
 
+//placeholder structs for settings
+struct graph_config1 {
+    static const size_t node_tuples = 31;
+    static const size_t edge_tuples = 90;
+    static const size_t pools = 3;
+    static const size_t insertions = node_tuples - pools*4;
+    static const bool display_stats = true;
+};
+
+struct graph_config2 {
+    static const size_t node_tuples = 80'000'000;
+    static const size_t edge_tuples = 240'000'000;
+    static const size_t pools = 6'000'000;
+    static const size_t insertions = node_tuples - pools*4;
+    static const bool display_stats = false;
+};
+
+using settings = graph_config2;
+
 int main(int argc, char * argv[]) {
     Kokkos::ScopeGuard scope_guard(argc, argv);
 
     //choose the number of tuples for the aosoa i.e. number of our DataTypes
-    int num_node_tuple = 80'000'000;//31;
-    int num_edge_tuple = 240'000'000;//*90; //We expect more edges than tuples
+    int num_node_tuple = settings::node_tuples;
+    int num_edge_tuple = settings::edge_tuples; //We expect more edges than tuples
 
     //Now we must determine how many memory pools the node array and the edge array must have
     //We could simply set it to one, but in general it should be no larger thant the number of nodes
-    int num_pools = 6'000'000;//3; //note num node pools is identical to num edge pools for now
+    int num_pools = settings::pools; //note num node pools is identical to num edge pools for now
    
     //Vector length for the SoAs
     const int VectorLength = 4; //length depends on the system arch
@@ -225,9 +244,11 @@ int main(int argc, char * argv[]) {
     //Declare our graph with the give sizes, for now we have the node types harcoded
     CjtEx::Graph<DeviceType, VectorLength> graph(num_node_tuple, num_edge_tuple, num_pools);
     
-    //Print intial stats
-    graph.print_stats();
-    //std::cin.get();
+    if(settings::display_stats)
+        graph.print_stats(); //Print intial stats
+
+    
+
     //slice the node and edge marks
     auto node_mark_slice = Cabana::slice<0>(graph.nodes);
     auto edge_mark_slice = Cabana::slice<0>(graph.edges);
@@ -244,7 +265,7 @@ int main(int argc, char * argv[]) {
     auto con_slice = Cabana::slice<1>(graph.edges);
 
     //Decided the number of insertions for the test
-    auto num_node_insertions = graph.nodes.size() - 8'000'000; //10;
+    auto num_node_insertions = settings::insertions;
     auto num_edges_per_node = 3;
     
     //start the timer
@@ -282,28 +303,40 @@ int main(int argc, char * argv[]) {
     timer.reset();
     std::cout << "Test took " << time << " seconds...\n";
 
+    //set the range policy
+    Kokkos::RangePolicy<ExecutionSpace> node_mark_rp(0, node_mark_slice.size());
+    
     //now to check for correctness, lest loop through and count all the node marked bits
     auto node_mark_count = 0;
-    for(auto i = 0; i < node_mark_slice.size(); i++) {
+    Kokkos::parallel_reduce("Mark Count Reduction", node_mark_rp, KOKKOS_LAMBDA(const int i, int& update) {
         if(node_mark_slice(i))
-            node_mark_count++;
-    }
-    std::cout << "Asked for " << num_node_insertions << " insertions, and found " 
+            update += 1;
+    }, node_mark_count);
+    Kokkos::fence();
+    //for(auto i = 0; i < node_mark_slice.size(); i++) {
+    //    if(node_mark_slice(i))
+    //        node_mark_count++;
+    //}
+    std::cout << "Asked for " << num_node_insertions << " node insertions, and found " 
         << node_mark_count << " marks!\n";
 
     
-    //now to check for correctness, lest loop through and count all the edge marked bits
+    //set the range policy
+    Kokkos::RangePolicy<ExecutionSpace> edge_mark_rp(0, edge_mark_slice.size());
+    
+    //now to check for correctness, lest loop through and count all the node marked bits
     auto edge_mark_count = 0;
-    for(auto i = 0; i < edge_mark_slice.size(); i++) {
+    Kokkos::parallel_reduce("Mark Count Reduction", edge_mark_rp, KOKKOS_LAMBDA(const int i, int& update) {
         if(edge_mark_slice(i))
-            edge_mark_count++;
-    }
-    std::cout << "Asked for " << num_node_insertions*num_edges_per_node << " insertions, and found " 
+            update += 1;
+    }, edge_mark_count);
+    Kokkos::fence();
+
+    std::cout << "Asked for " << num_node_insertions*num_edges_per_node << " edge insertions, and found " 
         << edge_mark_count << " marks!\n";
 
-
-    //print final stats
-    graph.print_stats();
+     if(settings::display_stats)
+        graph.print_stats(); //Print final stats
 
     return 0;
 
