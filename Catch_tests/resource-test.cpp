@@ -13,8 +13,14 @@ TEST_CASE( "Resource Init Test", "[resource_test]" )
 {
     using NodeDataTypes = Cabana::MemberTypes<int, double, bool>;
     Cajete::AosoaResource<NodeDataTypes, DeviceType> nodes("NodeResource", 100);
-    nodes.allocate(5, 1);
-    nodes.deallocate(5, 1);
+    //nodes.allocate(5, 1);
+    //nodes.deallocate(5, 1);
+
+    
+    Kokkos::parallel_for("TestHere", 10, KOKKOS_LAMBDA(const int i) {
+       //nodes.allocate(1, i);
+       //nodes.deallocate(1, i);
+    });
 
     REQUIRE(nodes.get_capacity() == 100);
     
@@ -31,12 +37,12 @@ TEST_CASE( "Binner Test", "[binner_test]" )
     int bsize = 4;
 
     Cajete::BinningData<DeviceType> binner(nbins, bsize);
-    
+    Cajete::Example<DeviceType> example; 
     REQUIRE(binner.numBin() == 10);
     REQUIRE(binner.binOffset(3) == 12);
     REQUIRE(binner.binCapacity(8) == 4);
     REQUIRE(binner.binSize(8) == 0);
-
+    
     auto binner_copy = binner;
 
     REQUIRE(binner_copy.binOffset(4) == 16);

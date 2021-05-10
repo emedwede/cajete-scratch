@@ -14,7 +14,7 @@ template<class DataTypes, class DeviceType>
 class AosoaResource : public IndexedMemoryResource {
     public:
         
-        Binner<DeviceType> binner;
+        BinningData<DeviceType> binner;
 
         using aosoa_resource_t = Cabana::AoSoA<DataTypes, DeviceType>;
  

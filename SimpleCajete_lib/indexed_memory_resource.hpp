@@ -1,6 +1,8 @@
 #ifndef INDEXED_MEMORY_RESOURCE_HPP
 #define INDEXED_MEMORY_RESOURCE_HPP
 
+#include <Kokkos_Core.hpp>
+
 /* A memory resource that works by using indirect
  * index access to blocks of memory instead of raw
  * pointers
@@ -12,7 +14,7 @@ class IndexedMemoryResource {
     //Interface to the Virtual Memory Resource Functions
     public:
         using IndexType = int;
-
+        
         IndexType allocate(IndexType n, IndexType p) {
             return do_allocate(n, p);
         }
