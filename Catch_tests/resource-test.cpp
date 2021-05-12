@@ -3,12 +3,32 @@
 #include "aosoa_resource.hpp"
 #include "binner.hpp"
 
+#include "resource.hpp"
+
 #ifdef KOKKOS_ENABLE_CUDA
 using DeviceType = Kokkos::CudaUVMSpace;
 #else
 using DeviceType = Kokkos::HostSpace;
 #endif
-   
+TEST_CASE( "AoSoA Alloc Test", "[alloc_test]" )
+{
+    size_t n = 100;
+    using NodeDataTypes = Cabana::MemberTypes<int, double, bool>;
+    Cajete::Resource<NodeDataTypes, DeviceType> nodes("NodeResource", n);
+
+    auto data = nodes.get_data();
+
+    REQUIRE(data.size() == n);
+
+    int num_allocs = 12;
+    Kokkos::parallel_for("allocate", num_allocs, KOKKOS_LAMBDA(const int i) { 
+            nodes.allocate(1); 
+    });
+    Kokkos::fence();
+    REQUIRE(num_allocs == nodes.get_num_allocs());
+}
+
+/*
 TEST_CASE( "Resource Init Test", "[resource_test]" )
 {
     using NodeDataTypes = Cabana::MemberTypes<int, double, bool>;
@@ -47,5 +67,5 @@ TEST_CASE( "Binner Test", "[binner_test]" )
 
     REQUIRE(binner_copy.binOffset(4) == 16);
 }
-
+*/
 
