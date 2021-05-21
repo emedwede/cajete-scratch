@@ -2,6 +2,7 @@
 #define CATCH_CONFIG_RUNNER //used for our custom main
 #include "catch.hpp"
 #include <Cabana_Core.hpp>
+#include <Kokkos_Core.hpp>
 
 int main(int argc, char *argv[]) {
 
